@@ -61,8 +61,7 @@ Board snapshot mode (one-shot board + preview):
 ```bash
 python3 window_stream.py --board-once
 ```
-   - Captures once and prints a 4x4 board with colored squares for small tiles (🟥/🟦/⬜️) plus numbers for larger tiles, and the preview label.
-   - Uses simple template matching for numbers; accuracy may vary without a dedicated OCR model.
+   - Captures once and prints a 4x4 board with colored squares for small tiles (🟥/🟦), blanks as `·`, all other/grays as `X`, and the preview label.
 
 Tile dump (segmentation debug):
 ```bash
@@ -70,7 +69,6 @@ python3 window_stream.py --dump-tiles out_tiles
 ```
    - Captures once and writes the 16 board tiles (and preview crop) into the given directory so you can inspect segmentation.
    - If auto window pick fails, the script will list windows for manual selection; if that also fails, it will try to grab the frontmost window without prompting.
-   - Output shows remaining small tiles explicitly (e.g., `pool[3]: R R B`) and `P(large)=x%`. Small pool is 4/4/4 and resets every 12 non-large tiles; large is 1 per 24 small tiles (inserted in addition).
 
 Default (arrow-key) trigger:
 ```bash

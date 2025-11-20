@@ -1,17 +1,14 @@
 import argparse
-import colorsys
 import os
 import queue
 import subprocess
-import tempfile
 import time
 import threading
-from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 
 from preview_detector import (
     COLOR_PROTOTYPES,
@@ -147,102 +144,6 @@ BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),   # from provided red samples
     "blue": np.array([132.33, 198.81, 243.71]),  # from provided blue samples
 }
-RED_HUE_TARGET = 0.86  # calibrated from provided red tiles (mean hue)
-RED_HUE_BAND = 0.12
-THREE_MSE_THRESHOLD = 0.12
-BLUE_HUE_TARGET = 0.52
-THREE_TEMPLATE_FILES = [
-    Path("out_tiles/tile_r0_c0.png"),
-    Path("out_tiles/tile_r1_c1.png"),
-    Path("out_tiles/tile_r2_c2.png"),
-    Path("out_tiles/tile_r3_c0.png"),
-]
-THREE_MSE_THRESHOLD = 0.12
-
-
-def cell_binarize(cell: np.ndarray, thresh: int = 140) -> np.ndarray:
-    """Return a binarized 64x64 mask of the foreground glyph inside a tile."""
-    try:
-        resample = Image.Resampling.BILINEAR
-    except AttributeError:
-        resample = Image.BILINEAR
-    gray = Image.fromarray(cell).convert("L")
-    # crop margins to avoid tile borders
-    w, h = gray.size
-    margin_w = int(w * 0.15)
-    margin_h = int(h * 0.15)
-    gray = gray.crop((margin_w, margin_h, w - margin_w, h - margin_h))
-    gray = gray.resize((64, 64), resample=resample)
-    arr = np.array(gray, dtype=np.uint8)
-    # Text is darker than background; invert threshold.
-    mask = (arr < thresh).astype(np.uint8)
-    return mask
-
-
-@lru_cache(maxsize=1)
-def three_template() -> Optional[np.ndarray]:
-    """Average mask for '3' glyph from sample tiles if available."""
-    masks = []
-    for path in THREE_TEMPLATE_FILES:
-        if path.exists():
-            try:
-                arr = np.array(Image.open(path).convert("RGB"))
-                masks.append(cell_binarize(arr))
-            except Exception:
-                continue
-    if not masks:
-        return None
-    return np.mean(masks, axis=0)
-
-
-@lru_cache(maxsize=None)
-def template_for_text(text: str) -> np.ndarray:
-    """Render a text template mask at 64x64 for matching."""
-    from PIL import ImageDraw, ImageFont
-
-    canvas = Image.new("L", (64, 64), 0)
-    draw = ImageDraw.Draw(canvas)
-    try:
-        font = ImageFont.truetype("Arial.ttf", 38)
-    except Exception:
-        font = ImageFont.load_default()
-    w, h = draw.textsize(text, font=font)
-    x = (64 - w) // 2
-    y = (64 - h) // 2
-    draw.text((x, y), text, fill=255, font=font)
-    return (np.array(canvas) > 0).astype(np.uint8)
-
-
-NUMERIC_CANDIDATES = [
-    "1",
-    "2",
-    "3",
-    "6",
-    "12",
-    "24",
-    "48",
-    "96",
-    "192",
-    "384",
-    "768",
-    "1536",
-]
-
-
-def match_numeric(cell: np.ndarray) -> str:
-    """Return the best-matching numeric label from templates."""
-    mask = cell_binarize(cell)
-    best = None
-    best_score = float("inf")
-    for cand in NUMERIC_CANDIDATES:
-        tpl = template_for_text(cand)
-        # Use mean squared error between masks.
-        diff = (mask.astype(np.float32) - tpl.astype(np.float32)) ** 2
-        score = diff.mean()
-        if score < best_score:
-            best_score = score
-            best = cand
-    return best or "?"
 
 
 def classify_cell(cell: np.ndarray) -> str:
@@ -277,56 +178,6 @@ def classify_cell(cell: np.ndarray) -> str:
     return TOKEN_OTHER
 
 
-def preprocess_for_ocr(cell: np.ndarray) -> Image.Image:
-    """
-    Prepare a cell image for tesseract:
-    - center crop to avoid borders
-    - grayscale, invert (dark text on light)
-    - contrast/brightness normalize
-    - upscale
-    """
-    h, w, _ = cell.shape
-    mh = int(h * 0.1)
-    mw = int(w * 0.1)
-    cropped = cell[mh : h - mh, mw : w - mw]
-    img = Image.fromarray(cropped).convert("L")
-    img = ImageOps.invert(img)
-    img = ImageOps.autocontrast(img)
-    try:
-        resample = Image.Resampling.BILINEAR  # Pillow >=9.1
-    except AttributeError:
-        resample = Image.BILINEAR
-    img = img.resize((240, 240), resample=resample)
-    return img
-
-
-def ocr_cell(cell: np.ndarray) -> str:
-    """Run tesseract CLI on the cell; return digits or TOKEN_OTHER."""
-    img = preprocess_for_ocr(cell)
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        img.save(tmp.name)
-        tmp_path = tmp.name
-    try:
-        cmd = [
-            "tesseract",
-            tmp_path,
-            "stdout",
-            "--psm",
-            "10",  # single character
-            "-c",
-            "tessedit_char_whitelist=0123456789",
-        ]
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
-        text = out.decode(errors="ignore").strip()
-        text = "".join(ch for ch in text if ch.isdigit())
-        return text if text else TOKEN_OTHER
-    except Exception:
-        return TOKEN_OTHER
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
 def classify_board(arr: np.ndarray) -> List[List[str]]:
     """
     Return a 4x4 grid of classified cells using fixed 1/4 splits inside the board ROI.
