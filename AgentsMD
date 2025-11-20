@@ -1,0 +1,46 @@
+Project: Threes helper – live preview tracker
+=============================================
+
+Purpose
+- Mac helper that watches the mirrored iPhone Threes window, detects the “next” tile preview (red/blue/gray or large-candidate band), and maintains 12-tile (4/4/4) and 24-tile (one large) state to display odds.
+
+Current files (in repo root)
+- preview_detector.py: image/array/PIL detector. Outputs {red, blue, gray, large_candidates}. Finds preview crop via saturation near upper center. Exposes classify_array / classify_pil / classify_image.
+- preview_detector.py also exposes board ROI helpers: find_board_roi, board_signature (low-res quantized fingerprint), board_signature_diff.
+- window_stream.py: default mode listens to arrow keys (Quartz event tap) and captures on each press; shows remaining small tiles as colored squares (🟥/🟦/⬜️) plus `P(large)=x%`. Hotkeys: Z undo last move, Q reset to a fresh game (immediate capture seeds the new cycle). Small pool: 4/4/4 resetting every 12 non-large tiles; large pool: 1 per 24 small tiles (inserted in addition). Optional polling mode with `--poll` still available; board change threshold tunable via --board-delta-threshold (default 0.3). Arrow capture delay defaults to 0.1s (`--arrow-delay`). Auto-selects the first window whose title starts with `iPhone Mirroring` (override with --auto-window-prefix). Frontmost fallback if enumeration fails. Added `--board-once` to snapshot the 4x4 board + preview, and `--dump-tiles <dir>` to write the 16 cell crops + preview for segmentation debugging.
+ - window_stream.py: default mode listens to arrow keys (Quartz event tap) and captures on each press; shows remaining small tiles as colored squares (🟥/🟦/⬜️) plus `P(large)=x%`. Hotkeys: Z undo last move, Q reset to a fresh game (immediate capture seeds the new cycle). Small pool: 4/4/4 resetting every 12 non-large tiles; large pool: 1 per 24 small tiles (inserted in addition). Optional polling mode with `--poll` still available; board change threshold tunable via --board-delta-threshold (default 0.3). Arrow capture delay defaults to 0.1s (`--arrow-delay`). Auto-selects the first window whose title starts with `iPhone Mirroring` (override with --auto-window-prefix). Frontmost fallback if enumeration fails; if auto-pick fails it will list windows for manual selection, then fallback to frontmost. Added `--board-once` to snapshot the 4x4 board + preview, and `--dump-tiles <dir>` to write the 16 cell crops + preview for segmentation debugging.
+- README.md: usage, permissions, and run commands.
+- Screenshots currently present: 'Screenshot 1.png', 'Screenshot 2.png', 'Screenshot 3.png', 'Screenshot 4.png'. (Earlier files with “Screenshot 2025-11-19 at 4.12.xx PM.png” existed; if needed, ensure sample images are available for classification tests.)
+
+Dependencies / permissions
+- Python libs: Pillow, numpy present. Install Quartz bindings for best results: `python -m pip install pyobjc-framework-Quartz` (use your Python path, e.g., /opt/homebrew/anaconda3/bin/python).
+- macOS permissions: Screen Recording (for screencapture) and Accessibility (for AppleScript fallback).
+
+How to run now
+- Screenshot test:
+  python3 - <<'PY'
+  import glob, subprocess
+  for path in glob.glob('Screenshot*PM.png'):
+      print(f'=== {path}')
+      subprocess.run(['python3','preview_detector.py','--image',path,'--debug'], check=False)
+  PY
+- Live polling (pick a window):
+  python3 window_stream.py --poll-seconds 0.4
+  - Choose the Threes/iPhone-mirroring window from the numbered list.
+  - Add --print-all to log every poll.
+  - If “No windows found,” press Enter, then click/focus Threes within 3 seconds; it will grab the frontmost window.
+  - If Quartz is missing, install pyobjc-framework-Quartz; otherwise it falls back to System Events (may fail for iPhone Mirroring).
+
+Recent blocker and mitigation
+- AppleScript/System Events often fails to get window id for “iPhone Mirroring” (-1728). Mitigation: use Quartz enumeration/capture via pyobjc-framework-Quartz. Frontmost fallback remains but relies on System Events if Quartz is missing.
+
+Game logic assumptions (for upcoming state engine)
+- Each 12-tile span: exactly 4 red, 4 blue, 4 gray; reset after 12.
+- Each 24-tile span: exactly one large tile randomly placed; may appear adjacent across spans.
+- Start tracking at game start (tile 1). Preview shows next small tile color or large band (three options); we only need color vs large-band flag.
+
+Next milestones
+1) Move/change detection: detect board change or hook a hotkey to trigger capture instead of fixed polling.
+2) State engine: track 12-tile counts (4/4/4), auto-reset every 12; track 24-span with one large; P(large next) = 1/(remaining slots).
+3) Minimal HUD: show remaining counts, tile index in 12-span, tiles since last large, P(large next), last detected preview.
+4) Polish: reselect/reset window, logging misreads, threshold tuning on live feed; consider region select fallback if window id capture remains flaky.
