@@ -338,7 +338,7 @@ def classify_board(arr: np.ndarray) -> List[List[str]]:
     base_cell_w = w / 4.05  # small squeeze to reflect narrower width
     offset_y = base_cell_h * 0.2  # lower the top row by ~20% of a tile height
     offset_x = base_cell_w * 0.1  # shift tiles right by ~10% of a tile width
-    cell_h = (h - offset_y) / 4.0
+    cell_h = (h - offset_y) / 4.0 * 0.95  # reduce per-row vertical step to ease overlap
     cell_w = (w - offset_x) / 4.05
     inset_y = 0.0
     inset_x = 0.0
@@ -371,7 +371,7 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
     base_cell_w = w / 4.05
     offset_y = base_cell_h * 0.2
     offset_x = base_cell_w * 0.1
-    cell_h = (h - offset_y) / 4.0
+    cell_h = (h - offset_y) / 4.0 * 0.95  # reduce per-row vertical step to ease overlap
     cell_w = (w - offset_x) / 4.05
     inset_y = cell_h * inset_ratio
     inset_x = cell_w * inset_ratio
