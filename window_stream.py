@@ -12,6 +12,12 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageOps
+try:
+    import imagehash
+    HAVE_IMAGEHASH = True
+except Exception:
+    HAVE_IMAGEHASH = False
+    imagehash = None
 
 from preview_detector import (
     COLOR_PROTOTYPES,
@@ -148,15 +154,15 @@ BOARD_COLOR_PROTOTYPES = {
 }
 RED_HUE_TARGET = 0.86  # calibrated from provided red tiles (mean hue)
 RED_HUE_BAND = 0.12
-THREE_MSE_THRESHOLD = 0.12
 BLUE_HUE_TARGET = 0.52
-THREE_TEMPLATE_FILES = [
-    Path("out_tiles/tile_r0_c0.png"),
-    Path("out_tiles/tile_r1_c1.png"),
-    Path("out_tiles/tile_r2_c2.png"),
-    Path("out_tiles/tile_r3_c0.png"),
+THREE_HASH_HEX = [
+    # Current calibrated '3' tile hashes (phash with 8% margin crop + autocontrast).
+    "f526999966663133",
+    "f526999966e63131",
+    "f526c99966e63131",
 ]
-THREE_MSE_THRESHOLD = 0.12
+# Max Hamming distance to count as a '3' when compared to the above hashes.
+THREE_HASH_THRESHOLD = 6
 
 
 def cell_binarize(cell: np.ndarray, thresh: int = 140) -> np.ndarray:
@@ -192,6 +198,61 @@ def three_template() -> Optional[np.ndarray]:
     if not masks:
         return None
     return np.mean(masks, axis=0)
+
+
+_three_hash_cache: Optional[List[imagehash.ImageHash]] = None
+
+
+def _prepare_image_for_hash(img: Image.Image, margin: float = 0.08) -> Image.Image:
+    """Normalize a tile image before hashing to improve robustness."""
+    img = img.convert("L")
+    w, h = img.size
+    mw = int(w * margin)
+    mh = int(h * margin)
+    img = img.crop((mw, mh, w - mw, h - mh))
+    return ImageOps.autocontrast(img)
+
+
+def load_three_hashes() -> List[imagehash.ImageHash]:
+    """Load perceptual hashes for known '3' tiles."""
+    if not HAVE_IMAGEHASH:
+        return []
+    global _three_hash_cache
+    if _three_hash_cache is not None:
+        return _three_hash_cache
+    hashes: List[imagehash.ImageHash] = []
+    # Primary source: hardcoded hashes so no files are required.
+    for hx in THREE_HASH_HEX:
+        try:
+            hashes.append(imagehash.hex_to_hash(hx))
+        except Exception:
+            continue
+    # Optional: also load from files if they happen to exist (helps when updating samples).
+    for path in (
+        Path("out_tiles/tile_r3_c2.png"),
+        Path("out_tiles/tile_r2_c0.png"),
+    ):
+        if path.exists():
+            try:
+                img = _prepare_image_for_hash(Image.open(path))
+                hashes.append(imagehash.phash(img))
+            except Exception:
+                continue
+    _three_hash_cache = hashes
+    return hashes
+
+
+def is_three_by_hash(cell: np.ndarray) -> bool:
+    """Return True if the cell matches a known '3' tile via perceptual hash."""
+    refs = load_three_hashes()
+    if not HAVE_IMAGEHASH or not refs:
+        return False
+    try:
+        cell_img = Image.fromarray(cell)
+        cell_hash = imagehash.phash(_prepare_image_for_hash(cell_img))
+    except Exception:
+        return False
+    return any(cell_hash - ref <= THREE_HASH_THRESHOLD for ref in refs)
 
 
 @lru_cache(maxsize=None)
@@ -249,7 +310,9 @@ def classify_cell(cell: np.ndarray) -> str:
     Classify a single tile cell into: red, blue, empty (·), or gray-as-X.
     No OCR is used.
     """
-    # Trim a small margin to avoid borders.
+    original = cell  # keep the untrimmed cell for hash-based matching
+
+    # Trim a small margin to avoid borders for color/blank checks.
     h, w, _ = cell.shape
     mh = int(h * 0.08)
     mw = int(w * 0.08)
@@ -272,7 +335,9 @@ def classify_cell(cell: np.ndarray) -> str:
     if blue_dist < 40:
         return SMALL_COLOR_MAP["blue"]
 
-    # Everything else is gray => X.
+    # Everything else is gray => check for '3' via perceptual hash, else X.
+    if is_three_by_hash(original):
+        return CELL_GRAY_TOKEN
     return TOKEN_OTHER
 
 
