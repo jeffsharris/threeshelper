@@ -462,6 +462,55 @@ def format_board(board: List[List[str]]) -> str:
     return "\n".join(" ".join(row) for row in board)
 
 
+def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
+    """Count red/blue/gray tiles on the 4x4 board (ignore empties)."""
+    counts = {"red": 0, "blue": 0, "gray": 0}
+    for row in board:
+        for cell in row:
+            if cell == TOKEN_EMPTY:
+                continue
+            if cell == SMALL_COLOR_MAP["red"]:
+                counts["red"] += 1
+            elif cell == SMALL_COLOR_MAP["blue"]:
+                counts["blue"] += 1
+            else:
+                counts["gray"] += 1
+    return counts
+
+
+def seed_tile_cycle_from_initial_state(
+    tile_cycle: "TileCycle", board: List[List[str]], preview_label: str
+) -> None:
+    """
+    Seed the tile cycle to reflect the initial game load where 8 board tiles
+    plus the preview (9th) are already known in the first batch of 12.
+    """
+    counts = _count_board_small_tiles(board)
+    if preview_label in counts:
+        counts[preview_label] += 1
+
+    base = {"red": 4, "blue": 4, "gray": 4}
+    # Clamp per-color to base (avoid negative remainder if detection overcounts a color).
+    clamped = {k: min(counts.get(k, 0), base[k]) for k in base}
+    # Ensure total seen does not exceed 9 (8 on board + 1 preview at new game start).
+    total_seen = sum(clamped.values())
+    if total_seen > 9:
+        over = total_seen - 9
+        # Trim from the most frequent colors first until we reach 9.
+        for color in sorted(clamped, key=lambda k: clamped[k], reverse=True):
+            if over <= 0:
+                break
+            drop = min(clamped[color], over)
+            clamped[color] -= drop
+            over -= drop
+
+    tile_cycle.small_counts = {k: max(0, base[k] - clamped.get(k, 0)) for k in base}
+    initial_seen = sum(clamped.values())
+    tile_cycle.small_pos = initial_seen
+    tile_cycle.large_pos = initial_seen  # large cadence advances with non-large tiles
+    tile_cycle.large_remaining = 1  # first large not yet drawn
+
+
 def list_windows_cg() -> List[Tuple[int, str, str]]:
     """
     Enumerate on-screen windows using CoreGraphics (preferred).
@@ -793,7 +842,22 @@ def stream_labels_on_keys(
     tile_cycle = TileCycle()
     history: list[Tuple[Dict[str, int], int, int, int]] = []
 
-    def capture_and_update(ts_event: float, is_reset: bool = False, apply_delay: bool = False) -> None:
+    def initialize_cycle(ts_event: float) -> None:
+        nonlocal tile_cycle
+        try:
+            arr = np.array(capture_window(window_id))
+            board = classify_board(arr)
+            preview_label, _debug = classify_array(arr)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[error] {exc}")
+            return
+        tile_cycle = TileCycle()
+        seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
+        history.clear()
+        ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
+        print(f"[{ts}] init -> {format_state(tile_cycle)}")
+
+    def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
         nonlocal tile_cycle
         try:
             if apply_delay and arrow_delay > 0:
@@ -803,14 +867,13 @@ def stream_labels_on_keys(
         except Exception as exc:  # noqa: BLE001
             print(f"[error] {exc}")
             return
-        if not is_reset:
-            history.append(tile_cycle.snapshot())
+        history.append(tile_cycle.snapshot())
         tile_cycle.update(label)
         ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
         print(f"[{ts}] {format_state(tile_cycle)}")
 
-    # Initial capture to seed the cycle with the first visible tile.
-    capture_and_update(time.time(), is_reset=True, apply_delay=False)
+    # Initial capture seeds the cycle with the 8 on-board + preview (9th) tiles.
+    initialize_cycle(time.time())
 
     while True:
         ts_event, key = events.get()
@@ -822,13 +885,11 @@ def stream_labels_on_keys(
                 print(f"[{ts}] undo -> {format_state(tile_cycle)}")
             continue
         if key == "reset":
-            tile_cycle = TileCycle()
-            history.clear()
-            capture_and_update(ts_event, is_reset=True, apply_delay=False)
+            initialize_cycle(ts_event)
             continue
 
         # Arrow key
-        capture_and_update(ts_event, is_reset=False, apply_delay=True)
+        capture_and_update(ts_event, apply_delay=True)
 
 
 def main() -> None:
