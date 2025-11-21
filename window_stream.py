@@ -45,84 +45,114 @@ KEYCODES = {
 }
 
 
+LARGE_DELAY_SMALLS = 20  # no large tile before this many smalls have been seen (first batch of 20 starts at first preview tile)
+LARGE_SPAN_SMALLS = 20   # one large per span of 20 small tiles (in 21 positions)
+
+
 class TileCycle:
     """
     Tracks small-tile pool (12 small tiles: 4 red/4 blue/4 gray) and large-tile pool
-    (1 large per span of 24 small tiles). Provides next-tile probabilities.
+    (1 large inserted once per 20 small tiles, in one of 21 positions after the first 20 drawn;
+    the initial on-board tiles are not counted toward that 20). Provides next-tile probabilities.
     """
 
     def __init__(self) -> None:
         self.small_counts: Dict[str, int] = {"red": 4, "blue": 4, "gray": 4}
         self.small_pos = 0  # small tiles seen in current 12-span
-        self.large_remaining = 1
-        self.large_pos = 0  # small tiles seen in current 24-span
+        self.small_seen_total = 0  # total small tiles seen since game start
+        self.span_small_pos = 0  # small tiles seen in the current 20-span (for large scheduling)
+        self.large_pending = False  # True when the span's large tile has not yet appeared
 
     def _reset_small(self) -> None:
         self.small_counts = {"red": 4, "blue": 4, "gray": 4}
         self.small_pos = 0
 
-    def _reset_large(self) -> None:
-        self.large_remaining = 1
-        self.large_pos = 0
+    def _start_new_large_span(self) -> None:
+        """Begin a new 20-small span with a fresh pending large."""
+        self.span_small_pos = 0
+        self.large_pending = True
 
     def update(self, label: str) -> None:
         """
         Record an observed tile label (red/blue/gray/large_candidates/unknown).
         Advances cycle positions and updates remaining pools.
-        Small/large spans advance only on non-large tiles (large tiles are inserted in addition).
+        Small spans advance only on non-large tiles (large tiles are inserted in addition).
         """
         is_large = label == "large_candidates"
         count_as_small = not is_large  # unknowns count as small to keep cycles moving.
         if count_as_small:
             self.small_pos += 1
-            self.large_pos += 1
+            self.small_seen_total += 1
+            # Large scheduling begins after the first LARGE_DELAY_SMALLS smalls.
+            if self.small_seen_total == LARGE_DELAY_SMALLS:
+                self._start_new_large_span()
+            elif self.small_seen_total > LARGE_DELAY_SMALLS:
+                self.span_small_pos += 1
 
         if label in self.small_counts and self.small_counts[label] > 0:
             self.small_counts[label] -= 1
 
-        if is_large and self.large_remaining > 0:
-            self.large_remaining -= 1
+        if is_large and self.large_pending:
+            self.large_pending = False
 
         if self.small_pos >= 12:
             self._reset_small()
-        if self.large_pos >= 24:
-            self._reset_large()
+
+        # Advance large span once the current 20 smalls are done and the large has appeared.
+        if self.small_seen_total >= LARGE_DELAY_SMALLS:
+            self.span_small_pos = min(self.span_small_pos, LARGE_SPAN_SMALLS)
+            if not self.large_pending and self.span_small_pos >= LARGE_SPAN_SMALLS:
+                self._start_new_large_span()
 
     def probabilities(self) -> Dict[str, float]:
         """
         Return probabilities for next tile: red, blue, gray, large.
-        Uses remaining counts divided by remaining slots in the current span.
+        Small probabilities use remaining counts divided by remaining slots in the current 12-span.
+        Large probability follows the 1-in-(remaining slots) model for the current 20-span,
+        and is 0 until 20 small tiles have been seen since game start.
         """
         small_slots_left = max(1, 12 - self.small_pos)
-        large_slots_left = max(1, 24 - self.large_pos)
 
         probs: Dict[str, float] = {}
         for color, remaining in self.small_counts.items():
             probs[color] = remaining / small_slots_left
 
-        probs["large_candidates"] = self.large_remaining / large_slots_left
+        probs["large_candidates"] = self.large_probability()
         return probs
 
     def large_probability(self) -> float:
         """Probability that the next tile is large."""
-        large_slots_left = max(1, 24 - self.large_pos)
-        return self.large_remaining / large_slots_left
+        # No large tiles in the first LARGE_DELAY_SMALLS smalls.
+        if self.small_seen_total < LARGE_DELAY_SMALLS:
+            return 0.0
+        if not self.large_pending:
+            return 0.0
+        remaining_slots = max(1, 21 - self.span_small_pos)
+        return 1.0 / remaining_slots
 
-    def snapshot(self) -> Tuple[Dict[str, int], int, int, int]:
-        return (self.small_counts.copy(), self.small_pos, self.large_remaining, self.large_pos)
+    def snapshot(self) -> Tuple[Dict[str, int], int, int, int, bool, int]:
+        return (
+            self.small_counts.copy(),
+            self.small_pos,
+            self.small_seen_total,
+            self.span_small_pos,
+            self.large_pending,
+            0,  # reserved for backward compatibility
+        )
 
-    def restore(self, snapshot: Tuple[Dict[str, int], int, int, int]) -> None:
-        counts, s_pos, large_rem, l_pos = snapshot
+    def restore(self, snapshot: Tuple[Dict[str, int], int, int, int, bool, int]) -> None:
+        counts, s_pos, small_seen_total, span_small_pos, large_pending, _reserved = snapshot
         self.small_counts = counts.copy()
         self.small_pos = s_pos
-        self.large_remaining = large_rem
-        self.large_pos = l_pos
+        self.small_seen_total = small_seen_total
+        self.span_small_pos = span_small_pos
+        self.large_pending = large_pending
 
 
-def format_state(tile_cycle: TileCycle) -> str:
+def format_state(tile_cycle: TileCycle, show_debug: bool = True) -> str:
     """
-    Return a human-readable small-pool listing plus large probability.
-    Example: pool[3]: R R B | P(large)=4.2%
+    Return a human-readable small-pool listing plus large probability and move index.
+    Example: move=9 | pool[3]: R R B | P(large)=4.2% | dbg span=2/20 pend=True
     """
     label_tokens = [
         ("red", "🟥"),
@@ -135,7 +165,13 @@ def format_state(tile_cycle: TileCycle) -> str:
     pool_str = " ".join(tokens) if tokens else "(empty)"
     remaining = len(tokens)
     large_prob = tile_cycle.large_probability() * 100.0
-    return f"pool[{remaining}]: {pool_str} | P(large)={large_prob:.1f}%"
+    move_idx = tile_cycle.small_seen_total
+    parts = [f"move={move_idx}", f"pool[{remaining}]: {pool_str}", f"P(large)={large_prob:.1f}%"]
+    if show_debug:
+        parts.append(
+            f"dbg span={tile_cycle.span_small_pos}/20 pend={tile_cycle.large_pending}"
+        )
+    return " | ".join(parts)
 
 
 # ---------- Board state classification ----------
@@ -458,12 +494,45 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
     return cells
 
 
+WIDE_TOKENS = {SMALL_COLOR_MAP["red"], SMALL_COLOR_MAP["blue"]}
+
+
+def _render_cell(token: str) -> str:
+    """Return a fixed-width (2-char) representation of a cell, padding narrow glyphs."""
+    if token in WIDE_TOKENS:
+        return token  # emoji tiles are visually double-width
+    return f" {token}"
+
+
 def format_board(board: List[List[str]]) -> str:
-    return "\n".join(" ".join(row) for row in board)
+    lines = [" ".join(_render_cell(tok) for tok in row) for row in board]
+    return "\n".join(lines)
+
+
+def preview_token(label: str) -> str:
+    """Render a token for the preview tile."""
+    if label == "red":
+        return SMALL_COLOR_MAP["red"]
+    if label == "blue":
+        return SMALL_COLOR_MAP["blue"]
+    if label == "gray":
+        return CELL_GRAY_TOKEN
+    if label == "large_candidates":
+        return TOKEN_OTHER
+    return "?"
+
+
+def format_board_with_preview(board: List[List[str]], preview_label: str) -> str:
+    """Return a string with a centered preview token above the 4x4 grid."""
+    board_lines = [" ".join(_render_cell(tok) for tok in row) for row in board]
+    width = max(len(line) for line in board_lines) if board_lines else 0
+    p_token = preview_token(preview_label)
+    preview_line = _render_cell(p_token).center(width)
+    return "\n".join([preview_line] + board_lines)
 
 
 def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
-    """Count red/blue/gray tiles on the 4x4 board (ignore empties)."""
+    """Count small tiles on the 4x4 board (ignore empties and big/unknown 'X')."""
     counts = {"red": 0, "blue": 0, "gray": 0}
     for row in board:
         for cell in row:
@@ -473,7 +542,7 @@ def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
                 counts["red"] += 1
             elif cell == SMALL_COLOR_MAP["blue"]:
                 counts["blue"] += 1
-            else:
+            elif cell == CELL_GRAY_TOKEN:
                 counts["gray"] += 1
     return counts
 
@@ -507,8 +576,10 @@ def seed_tile_cycle_from_initial_state(
     tile_cycle.small_counts = {k: max(0, base[k] - clamped.get(k, 0)) for k in base}
     initial_seen = sum(clamped.values())
     tile_cycle.small_pos = initial_seen
-    tile_cycle.large_pos = initial_seen  # large cadence advances with non-large tiles
-    tile_cycle.large_remaining = 1  # first large not yet drawn
+    # Large scheduling counts from the first preview tile (initial board tiles do NOT count).
+    tile_cycle.small_seen_total = 0
+    tile_cycle.span_small_pos = 0
+    tile_cycle.large_pending = False
 
 
 def list_windows_cg() -> List[Tuple[int, str, str]]:
@@ -805,8 +876,7 @@ def dump_board_state(window_id: int) -> None:
     board = classify_board(arr)
     preview_label, _debug = classify_array(arr)
     print("Board state:")
-    print(format_board(board))
-    print(f"Preview: {preview_label}")
+    print(format_board_with_preview(board, preview_label))
 
 
 def dump_tiles(window_id: int, out_dir: str) -> None:
@@ -854,6 +924,8 @@ def stream_labels_on_keys(
         tile_cycle = TileCycle()
         seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
         history.clear()
+        print("Board state at start:")
+        print(format_board_with_preview(board, preview_label))
         ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
         print(f"[{ts}] init -> {format_state(tile_cycle)}")
 
