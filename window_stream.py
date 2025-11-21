@@ -494,7 +494,8 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
     return cells
 
 
-WIDE_TOKENS = {SMALL_COLOR_MAP["red"], SMALL_COLOR_MAP["blue"]}
+POOL_GRAY_TOKEN = "⬜️"
+WIDE_TOKENS = {SMALL_COLOR_MAP["red"], SMALL_COLOR_MAP["blue"], POOL_GRAY_TOKEN}
 
 
 def _render_cell(token: str) -> str:
@@ -502,6 +503,23 @@ def _render_cell(token: str) -> str:
     if token in WIDE_TOKENS:
         return token  # emoji tiles are visually double-width
     return f" {token}"
+
+
+def _visual_width(text: str) -> int:
+    """Compute visual width treating emoji tiles as width 2."""
+    width = 0
+    for ch in text:
+        if ch in WIDE_TOKENS:
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def _pad_visual(text: str, target: int) -> str:
+    """Pad with spaces until visual width reaches target."""
+    pad_count = max(0, target - _visual_width(text))
+    return text + (" " * pad_count)
 
 
 def format_board(board: List[List[str]]) -> str:
@@ -531,6 +549,69 @@ def format_board_with_preview(board: List[List[str]], preview_label: str) -> str
     return "\n".join([preview_line] + board_lines)
 
 
+def render_move_table(
+    board: List[List[str]],
+    preview_label: str,
+    tile_cycle: "TileCycle",
+) -> str:
+    """
+    Render a compact table with columns: board | preview | P(large) | remaining pool.
+    """
+    board_lines = [" ".join(_render_cell(tok) for tok in row) for row in board]
+    board_w = max(_visual_width(line) for line in board_lines) if board_lines else 0
+
+    preview_token_str = _render_cell(preview_token(preview_label))
+    preview_w = max(_visual_width(preview_token_str), 2)
+    preview_lines = [preview_token_str] + [" " * preview_w] * (max(1, len(board_lines)) - 1)
+
+    move_line = f"move={tile_cycle.small_seen_total}"
+    p_large = f"P(large)={tile_cycle.large_probability() * 100:.1f}%"
+    batch20 = f"20-span: {tile_cycle.span_small_pos}/{LARGE_SPAN_SMALLS}"
+    batch12 = f"12-span: {tile_cycle.small_pos}/12"
+    large_lines_raw = [move_line, p_large, batch20, batch12]
+    large_w = max(_visual_width(line) for line in large_lines_raw)
+    large_lines = large_lines_raw + [" " * large_w] * max(0, len(board_lines) - len(large_lines_raw))
+
+    label_tokens = [
+        ("blue", SMALL_COLOR_MAP["blue"]),
+        ("red", SMALL_COLOR_MAP["red"]),
+        ("gray", POOL_GRAY_TOKEN),
+    ]
+    rem_lines_raw: list[str] = []
+    for key, tok in label_tokens:
+        count = max(0, tile_cycle.small_counts.get(key, 0))
+        line = " ".join([tok] * count) if count else ""
+        rem_lines_raw.append(line)
+    rem_w = max(_visual_width(line) for line in rem_lines_raw) if rem_lines_raw else 0
+    rem_w = max(rem_w, 10)
+    # Pad rem_lines to board height.
+    rem_lines = rem_lines_raw + [""] * max(0, len(board_lines) - len(rem_lines_raw))
+
+    # Normalize row count to board height.
+    rows = max(len(board_lines), 1)
+    out_lines = []
+    for i in range(rows):
+        b = board_lines[i] if i < len(board_lines) else " " * board_w
+        p = preview_lines[i] if i < len(preview_lines) else " " * preview_w
+        l = large_lines[i] if i < len(large_lines) else " " * large_w
+        r = rem_lines[i] if i < len(rem_lines) else " " * rem_w
+        out_lines.append(
+            f"{_pad_visual(b, board_w)} | {_pad_visual(p, preview_w)} | {_pad_visual(l, large_w)} | {_pad_visual(r, rem_w)}"
+        )
+    return "\n".join(out_lines)
+
+
+# ---------- Error formatting ----------
+
+C_RED = "\033[31m"
+C_RESET = "\033[0m"
+
+
+def print_error(msg: str) -> None:
+    """Print an error in red."""
+    print(f"{C_RED}[error]{C_RESET} {msg}")
+
+
 def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
     """Count small tiles on the 4x4 board (ignore empties and big/unknown 'X')."""
     counts = {"red": 0, "blue": 0, "gray": 0}
@@ -545,6 +626,28 @@ def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
             elif cell == CELL_GRAY_TOKEN:
                 counts["gray"] += 1
     return counts
+
+
+def preview_possible(tile_cycle: "TileCycle", preview_label: str) -> Tuple[bool, str]:
+    """
+    Return (is_possible, reason) for the current preview tile under the tile_cycle state.
+    - red/blue/gray must have remaining count > 0.
+    - large requires non-zero large probability (i.e., pending and beyond delay).
+    Also flags the case where large probability is 1.0 but the preview is not large.
+    """
+    if preview_label in ("red", "blue", "gray"):
+        remaining = tile_cycle.small_counts.get(preview_label, 0)
+        if remaining > 0:
+            # If we're certain the next tile should be large, but got a small, flag it.
+            if tile_cycle.large_probability() >= 0.999:
+                return False, "expected large tile with probability 100%"
+            return True, ""
+        return False, f"no {preview_label} tiles remaining in pool"
+    if preview_label == "large_candidates":
+        if tile_cycle.large_probability() > 0:
+            return True, ""
+        return False, "large tile not scheduled in current span"
+    return True, ""  # unknown preview labels are ignored
 
 
 def seed_tile_cycle_from_initial_state(
@@ -875,8 +978,9 @@ def dump_board_state(window_id: int) -> None:
         return
     board = classify_board(arr)
     preview_label, _debug = classify_array(arr)
-    print("Board state:")
-    print(format_board_with_preview(board, preview_label))
+    tc = TileCycle()
+    seed_tile_cycle_from_initial_state(tc, board, preview_label)
+    print(render_move_table(board, preview_label, tc))
 
 
 def dump_tiles(window_id: int, out_dir: str) -> None:
@@ -919,15 +1023,17 @@ def stream_labels_on_keys(
             board = classify_board(arr)
             preview_label, _debug = classify_array(arr)
         except Exception as exc:  # noqa: BLE001
-            print(f"[error] {exc}")
+            print_error(str(exc))
             return
         tile_cycle = TileCycle()
         seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
         history.clear()
-        print("Board state at start:")
-        print(format_board_with_preview(board, preview_label))
-        ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
-        print(f"[{ts}] init -> {format_state(tile_cycle)}")
+        print(render_move_table(board, preview_label, tile_cycle))
+        print()
+        ok, reason = preview_possible(tile_cycle, preview_label)
+        if not ok:
+            print_error(f"preview '{preview_label}' not possible at init: {reason}")
+        # No condensed debug line; table is the only state output (errors still printed).
 
     def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
         nonlocal tile_cycle
@@ -935,14 +1041,20 @@ def stream_labels_on_keys(
             if apply_delay and arrow_delay > 0:
                 time.sleep(arrow_delay)
             arr = np.array(capture_window(window_id))
+            board = classify_board(arr)
             label, _debug = classify_array(arr)
         except Exception as exc:  # noqa: BLE001
-            print(f"[error] {exc}")
+            print_error(str(exc))
             return
+        ok, reason = preview_possible(tile_cycle, label)
+        if not ok:
+            print_error(f"preview '{label}' not possible: {reason}")
         history.append(tile_cycle.snapshot())
         tile_cycle.update(label)
         ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
-        print(f"[{ts}] {format_state(tile_cycle)}")
+        print(f"[{ts}]")
+        print(render_move_table(board, label, tile_cycle))
+        print()
 
     # Initial capture seeds the cycle with the 8 on-board + preview (9th) tiles.
     initialize_cycle(time.time())
@@ -954,7 +1066,7 @@ def stream_labels_on_keys(
                 snapshot = history.pop()
                 tile_cycle.restore(snapshot)
                 ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
-                print(f"[{ts}] undo -> {format_state(tile_cycle)}")
+                print(f"[{ts}] undo")
             continue
         if key == "reset":
             initialize_cycle(ts_event)
