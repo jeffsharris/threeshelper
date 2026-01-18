@@ -245,6 +245,7 @@ def three_template() -> Optional[np.ndarray]:
 
 _three_hash_cache: Optional[List[imagehash.ImageHash]] = None
 _three_detector_cache: Optional[Dict[str, object]] = None
+_gray_detector_cache: Optional[Dict[str, object]] = None
 
 
 def _prepare_image_for_hash(img: Image.Image, margin: float = 0.08) -> Image.Image:
@@ -273,6 +274,27 @@ def load_three_detector(path: Path = Path("three_detector.json")) -> Optional[Di
         _three_detector_cache = None
         return None
     _three_detector_cache = data
+    return data
+
+
+def load_gray_detector(
+    path: Path = Path("gray_tile_detector.json"),
+) -> Optional[Dict[str, object]]:
+    global _gray_detector_cache
+    if _gray_detector_cache is not None:
+        return _gray_detector_cache
+    if not path.exists():
+        _gray_detector_cache = None
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        _gray_detector_cache = None
+        return None
+    if "detectors" not in data:
+        _gray_detector_cache = None
+        return None
+    _gray_detector_cache = data
     return data
 
 
@@ -343,6 +365,45 @@ def is_three_by_template(cell: np.ndarray) -> bool:
             if dist <= threshold:
                 return True
     return False
+
+
+def classify_gray_tile(cell: np.ndarray) -> Optional[str]:
+    """Return a numeric gray-tile label if confidently matched."""
+    data = load_gray_detector()
+    if not data:
+        return None
+    detectors = data.get("detectors", [])
+    gap_threshold = float(data.get("gap_threshold", 0.0))
+    best_label: Optional[str] = None
+    best_dist = float("inf")
+    best_threshold = float("inf")
+    second_best = float("inf")
+    for det in detectors:
+        labels = det.get("labels", {})
+        if not labels:
+            continue
+        thresholds = det.get("thresholds", {})
+        margin = float(det.get("margin", 0.12))
+        size = int(det.get("size", 64))
+        mask = _mask_from_tile(cell, size=size, margin=margin)
+        for label, templates in labels.items():
+            tmpl_arr = [np.array(t, dtype=np.float32) for t in templates]
+            if not tmpl_arr:
+                continue
+            dist = min(float(((mask - t) ** 2).mean()) for t in tmpl_arr)
+            if dist < best_dist:
+                second_best = best_dist
+                best_dist = dist
+                best_label = str(label)
+                best_threshold = float(thresholds.get(label, float("inf")))
+            elif dist < second_best:
+                second_best = dist
+    if not best_label:
+        return None
+    gap = second_best - best_dist if second_best < float("inf") else best_dist
+    if best_dist <= best_threshold and gap >= gap_threshold:
+        return best_label
+    return None
 
 
 def load_three_hashes() -> List[imagehash.ImageHash]:
@@ -530,7 +591,10 @@ def classify_cell(
     if blue_dist < 45:
         return SMALL_COLOR_MAP["blue"]
 
-    # Everything else is gray => check for '3' via template/hash, else X.
+    # Everything else is gray => attempt numeric label, then fallback to 3 detector.
+    gray_label = classify_gray_tile(original)
+    if gray_label:
+        return gray_label
     if is_three_by_template(original) or is_three_by_hash(original):
         return CELL_GRAY_TOKEN
     return TOKEN_OTHER
@@ -734,11 +798,25 @@ POOL_GRAY_TOKEN = "⬜️"
 WIDE_TOKENS = {SMALL_COLOR_MAP["red"], SMALL_COLOR_MAP["blue"], POOL_GRAY_TOKEN}
 
 
-def _render_cell(token: str) -> str:
-    """Return a fixed-width (2-char) representation of a cell, padding narrow glyphs."""
+def _token_width(token: str) -> int:
     if token in WIDE_TOKENS:
-        return token  # emoji tiles are visually double-width
-    return f" {token}"
+        return 2
+    return len(token)
+
+
+def _board_cell_width(board: List[List[str]]) -> int:
+    width = 2
+    for row in board:
+        for token in row:
+            width = max(width, _token_width(token))
+    return width
+
+
+def _render_cell(token: str, cell_width: int) -> str:
+    """Return a fixed-width representation of a cell using visual width."""
+    width = _token_width(token)
+    pad = max(0, cell_width - width)
+    return f"{token}{' ' * pad}"
 
 
 def _visual_width(text: str) -> int:
@@ -758,9 +836,13 @@ def _pad_visual(text: str, target: int) -> str:
     return text + (" " * pad_count)
 
 
+def _board_lines(board: List[List[str]]) -> List[str]:
+    cell_width = _board_cell_width(board)
+    return [" ".join(_render_cell(tok, cell_width) for tok in row) for row in board]
+
+
 def format_board(board: List[List[str]]) -> str:
-    lines = [" ".join(_render_cell(tok) for tok in row) for row in board]
-    return "\n".join(lines)
+    return "\n".join(_board_lines(board))
 
 
 def preview_token(label: str) -> str:
@@ -778,10 +860,10 @@ def preview_token(label: str) -> str:
 
 def format_board_with_preview(board: List[List[str]], preview_label: str) -> str:
     """Return a string with a centered preview token above the 4x4 grid."""
-    board_lines = [" ".join(_render_cell(tok) for tok in row) for row in board]
-    width = max(len(line) for line in board_lines) if board_lines else 0
+    board_lines = _board_lines(board)
+    width = max(_visual_width(line) for line in board_lines) if board_lines else 0
     p_token = preview_token(preview_label)
-    preview_line = _render_cell(p_token).center(width)
+    preview_line = _render_cell(p_token, _board_cell_width(board)).center(width)
     return "\n".join([preview_line] + board_lines)
 
 
@@ -793,10 +875,10 @@ def render_move_table(
     """
     Render a compact table with columns: board | preview | P(large) | remaining pool.
     """
-    board_lines = [" ".join(_render_cell(tok) for tok in row) for row in board]
+    board_lines = _board_lines(board)
     board_w = max(_visual_width(line) for line in board_lines) if board_lines else 0
 
-    preview_token_str = _render_cell(preview_token(preview_label))
+    preview_token_str = _render_cell(preview_token(preview_label), _board_cell_width(board))
     preview_w = max(_visual_width(preview_token_str), 2)
     preview_lines = [preview_token_str] + [" " * preview_w] * (max(1, len(board_lines)) - 1)
 
@@ -850,7 +932,22 @@ def print_error(msg: str) -> None:
 
 def print_legend() -> None:
     """Print a legend for board tokens."""
-    print("legend: 3=three, X=other gray, ·=empty")
+    labels: List[str] = []
+    data = load_gray_detector()
+    if data:
+        for det in data.get("detectors", []):
+            for label in det.get("labels", {}).keys():
+                if label not in labels:
+                    labels.append(str(label))
+    if labels:
+        try:
+            labels.sort(key=lambda x: int(x))
+        except Exception:
+            labels.sort()
+        label_str = "/".join(labels)
+        print(f"legend: 🟥=red, 🟦=blue, {label_str}=gray tiles, X=unknown, ·=empty")
+    else:
+        print("legend: 3=three, X=other gray, ·=empty")
 
 
 def _iso_ts(ts: Optional[float] = None) -> str:
