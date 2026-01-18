@@ -622,6 +622,19 @@ def _iso_ts(ts: Optional[float] = None) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamp))
 
 
+def _json_safe(obj: object) -> object:
+    """Convert numpy scalars/arrays and tuples into JSON-serializable types."""
+    if isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 class DatasetRecorder:
     """Record captures and labels to a session folder."""
 
@@ -638,7 +651,7 @@ class DatasetRecorder:
             "window": window_info or {},
             "version": 1,
         }
-        (self.session_dir / "session.json").write_text(json.dumps(meta, indent=2))
+        (self.session_dir / "session.json").write_text(json.dumps(_json_safe(meta), indent=2))
 
     def record_capture(
         self,
@@ -682,7 +695,7 @@ class DatasetRecorder:
             },
             "preview_debug": preview_debug,
         }
-        meta_path.write_text(json.dumps(meta, indent=2))
+        meta_path.write_text(json.dumps(_json_safe(meta), indent=2))
         manifest_entry = {
             "id": capture_id,
             "ts_event": meta["ts_event"],
@@ -690,7 +703,7 @@ class DatasetRecorder:
             "label": None,
         }
         with self.manifest_path.open("a") as f:
-            f.write(json.dumps(manifest_entry) + "\n")
+            f.write(json.dumps(_json_safe(manifest_entry)) + "\n")
 
         self.last_capture_id = capture_id
         return capture_id
@@ -707,14 +720,14 @@ class DatasetRecorder:
             return None
         meta["label"] = label
         meta["label_ts"] = _iso_ts()
-        meta_path.write_text(json.dumps(meta, indent=2))
+        meta_path.write_text(json.dumps(_json_safe(meta), indent=2))
         label_entry = {
             "id": self.last_capture_id,
             "label": label,
             "ts": meta["label_ts"],
         }
         with self.labels_path.open("a") as f:
-            f.write(json.dumps(label_entry) + "\n")
+            f.write(json.dumps(_json_safe(label_entry)) + "\n")
         return self.last_capture_id
 
 
