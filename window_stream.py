@@ -189,6 +189,8 @@ CELL_GRAY_TOKEN = "3"
 TOKEN_EMPTY = "·"
 TOKEN_OTHER = "X"
 BLANK_MEAN_THRESHOLD = 80.0  # calibrated from provided blank tiles (was 50)
+# Keep classification cells inset to match gray-tile extraction/training.
+CLASSIFY_INSET_RATIO = 0.12
 BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),
     "blue": np.array([132.33, 198.81, 243.71]),
@@ -658,7 +660,9 @@ def classify_board(arr: np.ndarray) -> List[List[str]]:
     A small inset is removed inside each cell to avoid tile borders.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(roi, inset_ratio=0.0)
+    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(
+        roi, inset_ratio=CLASSIFY_INSET_RATIO
+    )
 
     # Precompute cell brightness values to derive an adaptive blank threshold.
     cells: List[Tuple[int, int, np.ndarray]] = []
