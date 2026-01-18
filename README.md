@@ -55,6 +55,7 @@ python3 window_stream.py --record-dataset datasets
    - Adds `*_board_overlay.png` with the inferred grid and per-cell stats in `*_meta.json` for debugging.
    - Label keys (global): `C`=correct, `X`=incorrect, `U`=undo label.
    - Use arrow keys to play; each arrow capture becomes a dataset entry you can label.
+   - Capture waits for the board to settle (defaults: 2 stable frames, threshold 0.15, timeout 1.0s). Tune with `--settle-*` flags if needed.
 
 Optional polling mode (board diff):
 ```bash

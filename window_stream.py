@@ -1343,6 +1343,10 @@ def stream_labels_on_keys(
     arrow_delay: float,
     dataset_dir: Optional[str] = None,
     window_info: Optional[Dict[str, object]] = None,
+    settle_threshold: float = 0.15,
+    settle_frames: int = 2,
+    settle_poll: float = 0.05,
+    settle_timeout: float = 1.0,
 ) -> None:
     """
     Capture/detect on arrow key presses; support undo (z) and reset (q).
@@ -1379,12 +1383,47 @@ def stream_labels_on_keys(
         print()
         # No condensed debug line; table is the only state output (errors still printed).
 
+    def capture_after_settle(apply_delay: bool) -> Optional[np.ndarray]:
+        if apply_delay and arrow_delay > 0:
+            time.sleep(arrow_delay)
+        try:
+            arr = np.array(capture_window(window_id))
+        except Exception as exc:  # noqa: BLE001
+            print_error(str(exc))
+            return None
+        if settle_frames <= 0:
+            return arr
+        try:
+            prev_sig, _ = board_signature(arr)
+        except Exception:
+            return arr
+        stable = 0
+        start = time.time()
+        last_arr = arr
+        while time.time() - start < settle_timeout:
+            time.sleep(settle_poll)
+            try:
+                curr_arr = np.array(capture_window(window_id))
+                curr_sig, _ = board_signature(curr_arr)
+                diff = board_signature_diff(prev_sig, curr_sig)
+                prev_sig = curr_sig
+                last_arr = curr_arr
+                if diff < settle_threshold:
+                    stable += 1
+                else:
+                    stable = 0
+                if stable >= settle_frames:
+                    return last_arr
+            except Exception:
+                continue
+        return last_arr
+
     def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
         nonlocal tile_cycle
+        arr = capture_after_settle(apply_delay)
+        if arr is None:
+            return
         try:
-            if apply_delay and arrow_delay > 0:
-                time.sleep(arrow_delay)
-            arr = np.array(capture_window(window_id))
             board = classify_board(arr)
             label, _debug = classify_array(arr)
         except Exception as exc:  # noqa: BLE001
@@ -1481,6 +1520,30 @@ def main() -> None:
         help="Delay (seconds) after an arrow key press before capture, to let the board update.",
     )
     parser.add_argument(
+        "--settle-threshold",
+        type=float,
+        default=0.15,
+        help="Board signature diff threshold to consider the animation settled.",
+    )
+    parser.add_argument(
+        "--settle-frames",
+        type=int,
+        default=2,
+        help="Consecutive stable frames required before capture is accepted.",
+    )
+    parser.add_argument(
+        "--settle-poll",
+        type=float,
+        default=0.05,
+        help="Polling interval (seconds) while waiting for the board to settle.",
+    )
+    parser.add_argument(
+        "--settle-timeout",
+        type=float,
+        default=1.0,
+        help="Maximum time (seconds) to wait for the board to settle per move.",
+    )
+    parser.add_argument(
         "--poll",
         action="store_true",
         help="Use polling/board-change trigger instead of key-capture (default uses arrow keys).",
@@ -1547,6 +1610,10 @@ def main() -> None:
             args.arrow_delay,
             dataset_dir=args.record_dataset,
             window_info={"id": window_id, "app": app_name, "title": win_name},
+            settle_threshold=args.settle_threshold,
+            settle_frames=args.settle_frames,
+            settle_poll=args.settle_poll,
+            settle_timeout=args.settle_timeout,
         )
 
 
