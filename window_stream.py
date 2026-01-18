@@ -346,7 +346,51 @@ def match_numeric(cell: np.ndarray) -> str:
     return best or "?"
 
 
-def classify_cell(cell: np.ndarray) -> str:
+def _hue_dist(a: float, b: float) -> float:
+    """Return circular hue distance for [0,1] hue values."""
+    d = abs(a - b)
+    return min(d, 1.0 - d)
+
+
+def _rgb_to_hsv_mean(rgb: np.ndarray) -> Tuple[float, float, float]:
+    r, g, b = (rgb / 255.0).tolist()
+    return colorsys.rgb_to_hsv(r, g, b)
+
+
+def _dynamic_blank_threshold(values: List[float], default: float) -> float:
+    """Compute an Otsu-style threshold over cell brightness values."""
+    if not values:
+        return default
+    uniq = sorted(set(values))
+    if len(uniq) < 2:
+        return default
+    best_thr = default
+    best_var = -1.0
+    total = len(values)
+    for i in range(len(uniq) - 1):
+        thr = (uniq[i] + uniq[i + 1]) / 2.0
+        low = [v for v in values if v <= thr]
+        high = [v for v in values if v > thr]
+        if not low or not high:
+            continue
+        w0 = len(low) / total
+        w1 = len(high) / total
+        m0 = float(np.mean(low))
+        m1 = float(np.mean(high))
+        var_between = w0 * w1 * (m0 - m1) ** 2
+        if var_between > best_var:
+            best_var = var_between
+            best_thr = thr
+    # Clamp to a sensible range to avoid extreme thresholds.
+    return float(min(140.0, max(40.0, best_thr)))
+
+
+def classify_cell(
+    cell: np.ndarray,
+    blank_threshold: float,
+    color_prototypes: Optional[Dict[str, np.ndarray]] = None,
+    hsv_prototypes: Optional[Dict[str, Tuple[float, float, float]]] = None,
+) -> str:
     """
     Classify a single tile cell into: red, blue, empty (·), or gray-as-X.
     No OCR is used.
@@ -360,7 +404,7 @@ def classify_cell(cell: np.ndarray) -> str:
     cell = cell[mh : h - mh, mw : w - mw]
 
     # Empty if overall very dark.
-    if cell.reshape(-1, 3).mean() < BLANK_MEAN_THRESHOLD:
+    if cell.reshape(-1, 3).mean() < blank_threshold:
         return TOKEN_EMPTY
 
     # Center patch mean color.
@@ -369,11 +413,30 @@ def classify_cell(cell: np.ndarray) -> str:
     patch_mean = patch.reshape(-1, 3).mean(axis=0)
 
     # Prototype distance for red/blue.
-    red_dist = float(np.linalg.norm(patch_mean - BOARD_COLOR_PROTOTYPES["red"]))
-    blue_dist = float(np.linalg.norm(patch_mean - BOARD_COLOR_PROTOTYPES["blue"]))
+    protos = color_prototypes or BOARD_COLOR_PROTOTYPES
+    hsv_protos = hsv_prototypes or {
+        "red": _rgb_to_hsv_mean(protos["red"]),
+        "blue": _rgb_to_hsv_mean(protos["blue"]),
+    }
+    red_dist = float(np.linalg.norm(patch_mean - protos["red"]))
+    blue_dist = float(np.linalg.norm(patch_mean - protos["blue"]))
+    h, s, v = _rgb_to_hsv_mean(patch_mean)
+    red_h, red_s, _red_v = hsv_protos["red"]
+    blue_h, blue_s, _blue_v = hsv_protos["blue"]
+    red_h_dist = _hue_dist(h, red_h)
+    blue_h_dist = _hue_dist(h, blue_h)
+
+    # Require some saturation to classify colored tiles.
+    if s > 0.16 and v > 0.2:
+        if red_h_dist < 0.12 and red_dist < 80 and red_dist < blue_dist:
+            return SMALL_COLOR_MAP["red"]
+        if blue_h_dist < 0.12 and blue_dist < 80 and blue_dist < red_dist:
+            return SMALL_COLOR_MAP["blue"]
+
+    # Fallback to RGB-only distance checks.
     if red_dist < 60 and red_dist < blue_dist:
         return SMALL_COLOR_MAP["red"]
-    if blue_dist < 40:
+    if blue_dist < 45:
         return SMALL_COLOR_MAP["blue"]
 
     # Everything else is gray => check for '3' via perceptual hash, else X.
@@ -450,17 +513,68 @@ def _board_grid_params(
     xs = [int(offset_x + c * cell_w) for c in range(5)]
     ys = [int(offset_y + r * cell_h) for r in range(5)]
     return xs, ys, inset_x, inset_y
+
+
+def _gradient_magnitude(gray: np.ndarray) -> np.ndarray:
+    gx = np.abs(np.diff(gray, axis=1))
+    gy = np.abs(np.diff(gray, axis=0))
+    grad = np.zeros_like(gray)
+    grad[:, 1:] += gx
+    grad[1:, :] += gy
+    return grad
+
+
+def _grid_score(grad: np.ndarray, xs: List[int], ys: List[int]) -> float:
+    h, w = grad.shape
+    score = 0.0
+    for x in xs:
+        x0 = max(0, x - 1)
+        x1 = min(w, x + 2)
+        score += float(grad[:, x0:x1].mean())
+    for y in ys:
+        y0 = max(0, y - 1)
+        y1 = min(h, y + 2)
+        score += float(grad[y0:y1, :].mean())
+    return score
+
+
+def _refine_grid_params(
+    roi: np.ndarray, inset_ratio: float = 0.0, search: int = 8
+) -> Tuple[List[int], List[int], float, float, Dict[str, float]]:
+    xs_base, ys_base, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=inset_ratio)
+    gray = roi.mean(axis=2).astype(np.float32)
+    grad = _gradient_magnitude(gray)
+    h, w = grad.shape
+    best_score = -1.0
+    best_dx = 0
+    best_dy = 0
+    for dx in range(-search, search + 1):
+        for dy in range(-search, search + 1):
+            xs = [x + dx for x in xs_base]
+            ys = [y + dy for y in ys_base]
+            if xs[0] < 1 or ys[0] < 1 or xs[-1] >= w - 1 or ys[-1] >= h - 1:
+                continue
+            score = _grid_score(grad, xs, ys)
+            if score > best_score:
+                best_score = score
+                best_dx = dx
+                best_dy = dy
+    xs_ref = [x + best_dx for x in xs_base]
+    ys_ref = [y + best_dy for y in ys_base]
+    meta = {"dx": float(best_dx), "dy": float(best_dy), "score": float(best_score)}
+    return xs_ref, ys_ref, inset_x, inset_y, meta
 def classify_board(arr: np.ndarray) -> List[List[str]]:
     """
     Return a 4x4 grid of classified cells using fixed 1/4 splits inside the board ROI.
     A small inset is removed inside each cell to avoid tile borders.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=0.0)
+    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(roi, inset_ratio=0.0)
 
-    grid: List[List[str]] = []
+    # Precompute cell brightness values to derive an adaptive blank threshold.
+    cells: List[Tuple[int, int, np.ndarray]] = []
+    cell_means: List[float] = []
     for r in range(4):
-        row: List[str] = []
         y0, y1 = ys[r], ys[r + 1]
         y0i = int(y0 + inset_y)
         y1i = int(y1 - inset_y)
@@ -469,8 +583,14 @@ def classify_board(arr: np.ndarray) -> List[List[str]]:
             x0i = int(x0 + inset_x)
             x1i = int(x1 - inset_x)
             cell = roi[y0i:y1i, x0i:x1i]
-            row.append(classify_cell(cell))
-        grid.append(row)
+            stats = _cell_stats(cell)
+            cell_means.append(float(stats["trim_mean"]))
+            cells.append((r, c, cell))
+    blank_threshold = _dynamic_blank_threshold(cell_means, BLANK_MEAN_THRESHOLD)
+
+    grid: List[List[str]] = [["" for _ in range(4)] for _ in range(4)]
+    for r, c, cell in cells:
+        grid[r][c] = classify_cell(cell, blank_threshold=blank_threshold)
     return grid
 
 
@@ -479,7 +599,7 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
     Return list of (row, col, cell_array) using fixed 1/4 splits inside the board ROI.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=inset_ratio)
+    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(roi, inset_ratio=inset_ratio)
 
     cells: List[Tuple[int, int, np.ndarray]] = []
     for r in range(4):
@@ -502,7 +622,7 @@ def segment_board_cells_with_boxes(
     Return list of (row, col, (x0,y0,x1,y1), cell_array) plus the board ROI.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=inset_ratio)
+    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(roi, inset_ratio=inset_ratio)
     cells: List[Tuple[int, int, Tuple[int, int, int, int], np.ndarray]] = []
     for r in range(4):
         y0, y1 = ys[r], ys[r + 1]
@@ -743,7 +863,9 @@ class DatasetRecorder:
         Image.fromarray(board_roi).save(board_path)
         Image.fromarray(preview_roi).save(preview_path)
 
-        xs, ys, inset_x, inset_y = _board_grid_params(board_roi.shape, inset_ratio=0.0)
+        xs, ys, inset_x, inset_y, grid_meta = _refine_grid_params(
+            board_roi, inset_ratio=0.0
+        )
         boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
         cell_stats: List[Dict[str, object]] = []
         for r in range(4):
@@ -762,6 +884,9 @@ class DatasetRecorder:
                 boxes.append((r, c, box))
         overlay_img = _draw_board_overlay(board_roi, boxes)
         overlay_img.save(board_overlay_path)
+        blank_threshold = _dynamic_blank_threshold(
+            [float(stat["trim_mean"]) for stat in cell_stats], BLANK_MEAN_THRESHOLD
+        )
 
         meta = {
             "id": capture_id,
@@ -781,6 +906,8 @@ class DatasetRecorder:
                 "board": board_box,
                 "preview": preview_box,
             },
+            "grid_meta": grid_meta,
+            "blank_threshold": blank_threshold,
             "cell_stats": cell_stats,
             "preview_debug": preview_debug,
         }
