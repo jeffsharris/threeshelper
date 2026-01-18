@@ -48,6 +48,20 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
         for t in tiles
     ]
     options = "".join(f'<option value="{x}"></option>' for x in allowed)
+    rows_html = []
+    for t in tiles_data:
+        tile_id = t["tile_id"]
+        image = t["image"]
+        label = labels.get(tile_id, "")
+        row = (
+            '<div class="row">'
+            f'<img src="../tiles/{image}" alt="{tile_id}" />'
+            f'<div class="tile-id">{tile_id}</div>'
+            f'<input type="text" list="numbers" value="{label}" />'
+            "</div>"
+        )
+        rows_html.append(row)
+    rows_block = "\n    ".join(rows_html)
     template = """<!doctype html>
 <html>
 <head>
@@ -76,11 +90,11 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
   <datalist id="numbers">
     __OPTIONS__
   </datalist>
-  <div id="list"></div>
+  <div id="list">
+    __ROWS__
+  </div>
 
   <script>
-    const tiles = __TILES__;
-    const labels = __LABELS__;
     const list = document.getElementById('list');
     const status = document.getElementById('status');
 
@@ -91,31 +105,9 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
       status.textContent = `Labeled ${filled} / ${inputs.length}`;
     }
 
-    function buildRow(tile) {
-      const row = document.createElement('div');
-      row.className = 'row';
-
-      const img = document.createElement('img');
-      img.src = `../tiles/${tile.image}`;
-      img.alt = tile.tile_id;
-
-      const id = document.createElement('div');
-      id.className = 'tile-id';
-      id.textContent = tile.tile_id;
-
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.setAttribute('list', 'numbers');
-      input.value = labels[tile.tile_id] || '';
+    list.querySelectorAll('input').forEach(input => {
       input.addEventListener('input', updateStatus);
-
-      row.appendChild(img);
-      row.appendChild(id);
-      row.appendChild(input);
-      return row;
-    }
-
-    tiles.forEach(tile => list.appendChild(buildRow(tile)));
+    });
     updateStatus();
 
     function gatherRows() {
@@ -152,9 +144,8 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
   </script>
 </body>
 </html>"""
-    html = template.replace("__TILES__", json.dumps(tiles_data))
-    html = html.replace("__LABELS__", json.dumps(labels))
-    html = html.replace("__OPTIONS__", options)
+    html = template.replace("__OPTIONS__", options)
+    html = html.replace("__ROWS__", rows_block)
     return html
 
 
