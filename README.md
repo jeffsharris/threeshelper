@@ -47,6 +47,14 @@ python3 window_stream.py
    - If you see “old” previews (race with animation), add a small delay before capture: `--arrow-delay 0.1` (default 0.1).
    - Auto-selects the first window whose title starts with `iPhone Mirroring`. Override with `--auto-window-prefix ""` to disable or another prefix to target a different window.
 
+Dataset capture + labeling (arrow-key mode):
+```bash
+python3 window_stream.py --record-dataset datasets
+```
+   - Creates `datasets/session_YYYYMMDD_HHMMSS/` with full screenshots, board crops, preview crops, and JSON metadata.
+   - Label keys (global): `C`=correct, `X`=incorrect, `U`=undo label.
+   - Use arrow keys to play; each arrow capture becomes a dataset entry you can label.
+
 Optional polling mode (board diff):
 ```bash
 python3 window_stream.py --poll --poll-seconds 0.4

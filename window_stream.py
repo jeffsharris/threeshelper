@@ -1,5 +1,6 @@
 import argparse
 import colorsys
+import json
 import os
 import queue
 import subprocess
@@ -42,6 +43,9 @@ KEYCODES = {
     126: "up",
     6: "undo",   # z
     12: "reset",  # q
+    8: "label_correct",  # c
+    7: "label_incorrect",  # x
+    32: "label_undo",  # u
 }
 
 
@@ -184,6 +188,7 @@ SMALL_COLOR_MAP = {
 CELL_GRAY_TOKEN = "3"
 TOKEN_EMPTY = "·"
 TOKEN_OTHER = "X"
+BLANK_MEAN_THRESHOLD = 80.0  # calibrated from provided blank tiles (was 50)
 BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),
     "blue": np.array([132.33, 198.81, 243.71]),
@@ -355,7 +360,7 @@ def classify_cell(cell: np.ndarray) -> str:
     cell = cell[mh : h - mh, mw : w - mw]
 
     # Empty if overall very dark.
-    if cell.reshape(-1, 3).mean() < 50:
+    if cell.reshape(-1, 3).mean() < BLANK_MEAN_THRESHOLD:
         return TOKEN_EMPTY
 
     # Center patch mean color.
@@ -612,6 +617,107 @@ def print_error(msg: str) -> None:
     print(f"{C_RED}[error]{C_RESET} {msg}")
 
 
+def _iso_ts(ts: Optional[float] = None) -> str:
+    stamp = ts if ts is not None else time.time()
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamp))
+
+
+class DatasetRecorder:
+    """Record captures and labels to a session folder."""
+
+    def __init__(self, base_dir: Path, window_info: Optional[Dict[str, object]] = None) -> None:
+        session = time.strftime("session_%Y%m%d_%H%M%S", time.localtime())
+        self.session_dir = base_dir / session
+        self.session_dir.mkdir(parents=True, exist_ok=False)
+        self.manifest_path = self.session_dir / "manifest.jsonl"
+        self.labels_path = self.session_dir / "labels.jsonl"
+        self.capture_idx = 0
+        self.last_capture_id: Optional[int] = None
+        meta = {
+            "created": _iso_ts(),
+            "window": window_info or {},
+            "version": 1,
+        }
+        (self.session_dir / "session.json").write_text(json.dumps(meta, indent=2))
+
+    def record_capture(
+        self,
+        arr: np.ndarray,
+        board: List[List[str]],
+        preview_label: str,
+        preview_debug: Dict,
+        window_id: int,
+        ts_event: float,
+    ) -> int:
+        self.capture_idx += 1
+        capture_id = self.capture_idx
+        prefix = f"{capture_id:06d}"
+        full_path = self.session_dir / f"{prefix}_full.png"
+        board_path = self.session_dir / f"{prefix}_board.png"
+        preview_path = self.session_dir / f"{prefix}_preview.png"
+        meta_path = self.session_dir / f"{prefix}_meta.json"
+
+        Image.fromarray(arr).save(full_path)
+        board_roi, board_box = find_board_roi(arr)
+        preview_roi, preview_box = find_preview_roi(arr)
+        Image.fromarray(board_roi).save(board_path)
+        Image.fromarray(preview_roi).save(preview_path)
+
+        meta = {
+            "id": capture_id,
+            "ts_event": _iso_ts(ts_event),
+            "ts_saved": _iso_ts(),
+            "window_id": window_id,
+            "label": None,
+            "board": board,
+            "preview_label": preview_label,
+            "paths": {
+                "full": full_path.name,
+                "board": board_path.name,
+                "preview": preview_path.name,
+            },
+            "roi": {
+                "board": board_box,
+                "preview": preview_box,
+            },
+            "preview_debug": preview_debug,
+        }
+        meta_path.write_text(json.dumps(meta, indent=2))
+        manifest_entry = {
+            "id": capture_id,
+            "ts_event": meta["ts_event"],
+            "meta": meta_path.name,
+            "label": None,
+        }
+        with self.manifest_path.open("a") as f:
+            f.write(json.dumps(manifest_entry) + "\n")
+
+        self.last_capture_id = capture_id
+        return capture_id
+
+    def set_label(self, label: Optional[str]) -> Optional[int]:
+        if self.last_capture_id is None:
+            return None
+        meta_path = self.session_dir / f"{self.last_capture_id:06d}_meta.json"
+        if not meta_path.exists():
+            return None
+        try:
+            meta = json.loads(meta_path.read_text())
+        except json.JSONDecodeError:
+            return None
+        meta["label"] = label
+        meta["label_ts"] = _iso_ts()
+        meta_path.write_text(json.dumps(meta, indent=2))
+        label_entry = {
+            "id": self.last_capture_id,
+            "label": label,
+            "ts": meta["label_ts"],
+        }
+        with self.labels_path.open("a") as f:
+            f.write(json.dumps(label_entry) + "\n")
+        return self.last_capture_id
+
+
 def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
     """Count small tiles on the 4x4 board (ignore empties and big/unknown 'X')."""
     counts = {"red": 0, "blue": 0, "gray": 0}
@@ -658,8 +764,6 @@ def seed_tile_cycle_from_initial_state(
     plus the preview (9th) are already known in the first batch of 12.
     """
     counts = _count_board_small_tiles(board)
-    if preview_label in counts:
-        counts[preview_label] += 1
 
     base = {"red": 4, "blue": 4, "gray": 4}
     # Clamp per-color to base (avoid negative remainder if detection overcounts a color).
@@ -678,6 +782,7 @@ def seed_tile_cycle_from_initial_state(
 
     tile_cycle.small_counts = {k: max(0, base[k] - clamped.get(k, 0)) for k in base}
     initial_seen = sum(clamped.values())
+    # Board tiles have been consumed from the 12-span.
     tile_cycle.small_pos = initial_seen
     # Large scheduling counts from the first preview tile (initial board tiles do NOT count).
     tile_cycle.small_seen_total = 0
@@ -1007,14 +1112,22 @@ def dump_tiles(window_id: int, out_dir: str) -> None:
 def stream_labels_on_keys(
     window_id: int,
     arrow_delay: float,
+    dataset_dir: Optional[str] = None,
+    window_info: Optional[Dict[str, object]] = None,
 ) -> None:
     """
     Capture/detect on arrow key presses; support undo (z) and reset (q).
+    Optional labeling keys: c=correct, x=incorrect, u=undo label.
     Requires Quartz event tap permissions.
     """
     events = start_key_listener()
     tile_cycle = TileCycle()
     history: list[Tuple[Dict[str, int], int, int, int]] = []
+    recorder = None
+    if dataset_dir:
+        recorder = DatasetRecorder(Path(dataset_dir), window_info=window_info)
+        print(f"Recording dataset to {recorder.session_dir}")
+        print("Label keys: c=correct, x=incorrect, u=undo label")
 
     def initialize_cycle(ts_event: float) -> None:
         nonlocal tile_cycle
@@ -1028,11 +1141,13 @@ def stream_labels_on_keys(
         tile_cycle = TileCycle()
         seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
         history.clear()
-        print(render_move_table(board, preview_label, tile_cycle))
-        print()
         ok, reason = preview_possible(tile_cycle, preview_label)
         if not ok:
             print_error(f"preview '{preview_label}' not possible at init: {reason}")
+        # Consume the preview so the displayed pool reflects tiles remaining after it.
+        tile_cycle.update(preview_label)
+        print(render_move_table(board, preview_label, tile_cycle))
+        print()
         # No condensed debug line; table is the only state output (errors still printed).
 
     def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
@@ -1052,8 +1167,20 @@ def stream_labels_on_keys(
         history.append(tile_cycle.snapshot())
         tile_cycle.update(label)
         ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
+        capture_id = None
+        if recorder:
+            capture_id = recorder.record_capture(
+                arr,
+                board,
+                label,
+                _debug,
+                window_id,
+                ts_event,
+            )
         print(f"[{ts}]")
         print(render_move_table(board, label, tile_cycle))
+        if recorder and capture_id is not None:
+            print(f"capture={capture_id} label=unlabeled")
         print()
 
     # Initial capture seeds the cycle with the 8 on-board + preview (9th) tiles.
@@ -1070,6 +1197,22 @@ def stream_labels_on_keys(
             continue
         if key == "reset":
             initialize_cycle(ts_event)
+            continue
+        if key in ("label_correct", "label_incorrect", "label_undo"):
+            if not recorder:
+                continue
+            label = None
+            if key == "label_correct":
+                label = "correct"
+            elif key == "label_incorrect":
+                label = "incorrect"
+            capture_id = recorder.set_label(label)
+            ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
+            if capture_id is None:
+                print_error("No capture available to label yet.")
+            else:
+                label_str = label if label is not None else "cleared"
+                print(f"[{ts}] label={label_str} capture={capture_id}")
             continue
 
         # Arrow key
@@ -1128,6 +1271,11 @@ def main() -> None:
         type=str,
         help="Dump the 16 board tiles (and preview) to this directory and exit.",
     )
+    parser.add_argument(
+        "--record-dataset",
+        type=str,
+        help="Record captures to a dataset directory (creates a session subfolder).",
+    )
     args = parser.parse_args()
 
     if args.window_id:
@@ -1152,6 +1300,9 @@ def main() -> None:
         return
 
     print(f"Monitoring window {window_id} ({app_name} – {win_name})")
+    if args.record_dataset and args.poll:
+        print_error("--record-dataset is supported only in arrow-key mode (omit --poll).")
+        return
     if args.poll:
         print(f"Polling every {args.poll_seconds}s. Ctrl+C to stop.")
         stream_labels(
@@ -1165,6 +1316,8 @@ def main() -> None:
         stream_labels_on_keys(
             window_id,
             args.arrow_delay,
+            dataset_dir=args.record_dataset,
+            window_info={"id": window_id, "app": app_name, "title": win_name},
         )
 
 
