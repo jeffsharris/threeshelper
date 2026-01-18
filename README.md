@@ -69,6 +69,13 @@ python3 extract_gray_tiles.py --session session_YYYYMMDD_HHMMSS
      ```
      Then open `datasets/gray_labels/<session>/labeler/index.html` and click “Save CSV”.
 
+Train 3-detector from labeled tiles:
+```bash
+python3 train_three_detector.py --labels-dir datasets/gray_labels/<session>
+```
+   - Writes `three_detector.json` used by the live classifier.
+   - Uses clustered 3-templates for better recall without false positives.
+
 Optional polling mode (board diff):
 ```bash
 python3 window_stream.py --poll --poll-seconds 0.4

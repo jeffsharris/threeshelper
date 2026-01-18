@@ -242,6 +242,7 @@ def three_template() -> Optional[np.ndarray]:
 
 
 _three_hash_cache: Optional[List[imagehash.ImageHash]] = None
+_three_detector_cache: Optional[Dict[str, object]] = None
 
 
 def _prepare_image_for_hash(img: Image.Image, margin: float = 0.08) -> Image.Image:
@@ -252,6 +253,94 @@ def _prepare_image_for_hash(img: Image.Image, margin: float = 0.08) -> Image.Ima
     mh = int(h * margin)
     img = img.crop((mw, mh, w - mw, h - mh))
     return ImageOps.autocontrast(img)
+
+
+def load_three_detector(path: Path = Path("three_detector.json")) -> Optional[Dict[str, object]]:
+    global _three_detector_cache
+    if _three_detector_cache is not None:
+        return _three_detector_cache
+    if not path.exists():
+        _three_detector_cache = None
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        _three_detector_cache = None
+        return None
+    if "detectors" not in data:
+        _three_detector_cache = None
+        return None
+    _three_detector_cache = data
+    return data
+
+
+def _mask_from_tile(cell: np.ndarray, size: int = 64, margin: float = 0.12) -> np.ndarray:
+    img = Image.fromarray(cell).convert("L")
+    w, h = img.size
+    mw = int(w * margin)
+    mh = int(h * margin)
+    img = img.crop((mw, mh, w - mw, h - mh))
+    img = ImageOps.autocontrast(img)
+    try:
+        resample = Image.Resampling.BILINEAR
+    except AttributeError:
+        resample = Image.BILINEAR
+    img = img.resize((size, size), resample=resample)
+    arr = np.array(img, dtype=np.uint8)
+    # Otsu threshold
+    hist = np.bincount(arr.flatten(), minlength=256).astype(np.float64)
+    total = arr.size
+    sum_total = float((np.arange(256) * hist).sum())
+    sum_b = 0.0
+    w_b = 0.0
+    max_var = 0.0
+    threshold = 127
+    for t in range(256):
+        w_b += hist[t]
+        if w_b == 0:
+            continue
+        w_f = total - w_b
+        if w_f == 0:
+            break
+        sum_b += t * hist[t]
+        m_b = sum_b / w_b
+        m_f = (sum_total - sum_b) / w_f
+        var_between = w_b * w_f * (m_b - m_f) ** 2
+        if var_between > max_var:
+            max_var = var_between
+            threshold = t
+    return (arr < threshold).astype(np.float32)
+
+
+def is_three_by_template(cell: np.ndarray) -> bool:
+    data = load_three_detector()
+    if not data:
+        return False
+    detectors = data.get("detectors", [])
+    for det in detectors:
+        templates = det.get("templates")
+        mean_mask = det.get("mean_mask")
+        threshold = float(det.get("threshold", 0.0))
+        margin = float(det.get("margin", 0.12))
+        if templates:
+            tmpl_arr = [np.array(t, dtype=np.float32) for t in templates]
+            if not tmpl_arr:
+                continue
+            size = int(det.get("size", tmpl_arr[0].shape[0]))
+            mask = _mask_from_tile(cell, size=size, margin=margin)
+            dist = min(float(((mask - t) ** 2).mean()) for t in tmpl_arr)
+            if dist <= threshold:
+                return True
+        elif mean_mask is not None:
+            mean_arr = np.array(mean_mask, dtype=np.float32)
+            size = int(det.get("size", mean_arr.shape[0] if mean_arr.ndim == 2 else 64))
+            if mean_arr.ndim != 2:
+                continue
+            mask = _mask_from_tile(cell, size=size, margin=margin)
+            dist = float(((mask - mean_arr) ** 2).mean())
+            if dist <= threshold:
+                return True
+    return False
 
 
 def load_three_hashes() -> List[imagehash.ImageHash]:
@@ -439,8 +528,8 @@ def classify_cell(
     if blue_dist < 45:
         return SMALL_COLOR_MAP["blue"]
 
-    # Everything else is gray => check for '3' via perceptual hash, else X.
-    if is_three_by_hash(original):
+    # Everything else is gray => check for '3' via template/hash, else X.
+    if is_three_by_template(original) or is_three_by_hash(original):
         return CELL_GRAY_TOKEN
     return TOKEN_OTHER
 

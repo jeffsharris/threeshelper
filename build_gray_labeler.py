@@ -85,8 +85,11 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
   <div class="controls">
     <button id="save">Save CSV</button>
     <button id="saveJson" class="secondary">Save JSON</button>
+    <button id="fillCsv" class="secondary">Fill CSV</button>
+    <button id="copyCsv" class="secondary">Copy CSV</button>
     <span id="status" class="status"></span>
   </div>
+  <textarea id="csvOutput" rows="6" style="width: 100%; margin-bottom: 12px; background: #10101a; color: #e6e6f0; border: 1px solid #3a3a52; border-radius: 6px; padding: 8px;"></textarea>
   <datalist id="numbers">
     __OPTIONS__
   </datalist>
@@ -121,6 +124,13 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
       return out;
     }
 
+    function buildCsv() {
+      const rows = gatherRows();
+      const lines = ['tile_id,label'];
+      rows.forEach(r => { lines.push(`${r.tile_id},${r.label}`); });
+      return lines.join('\\n');
+    }
+
     function download(filename, text) {
       const blob = new Blob([text], { type: 'text/plain' });
       const link = document.createElement('a');
@@ -131,15 +141,28 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
     }
 
     document.getElementById('save').addEventListener('click', () => {
-      const rows = gatherRows();
-      const lines = ['tile_id,label'];
-      rows.forEach(r => { lines.push(`${r.tile_id},${r.label}`); });
-      download('labels.csv', lines.join('\n'));
+      download('labels.csv', buildCsv());
     });
 
     document.getElementById('saveJson').addEventListener('click', () => {
       const rows = gatherRows();
       download('labels.json', JSON.stringify(rows, null, 2));
+    });
+
+    document.getElementById('fillCsv').addEventListener('click', () => {
+      document.getElementById('csvOutput').value = buildCsv();
+    });
+
+    document.getElementById('copyCsv').addEventListener('click', () => {
+      const text = buildCsv();
+      const textarea = document.getElementById('csvOutput');
+      textarea.value = text;
+      textarea.select();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        document.execCommand('copy');
+      }
     });
   </script>
 </body>
