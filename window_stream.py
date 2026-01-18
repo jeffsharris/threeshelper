@@ -844,6 +844,11 @@ def print_error(msg: str) -> None:
     print(f"{C_RED}[error]{C_RESET} {msg}")
 
 
+def print_legend() -> None:
+    """Print a legend for board tokens."""
+    print("legend: 3=three, X=other gray, ·=empty")
+
+
 def _iso_ts(ts: Optional[float] = None) -> str:
     stamp = ts if ts is not None else time.time()
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamp))
@@ -1542,6 +1547,7 @@ def stream_labels_on_keys(
 
     # Initial capture seeds the cycle with the 8 on-board + preview (9th) tiles.
     initialize_cycle(time.time())
+    print_legend()
 
     while True:
         ts_event, key = events.get()
@@ -1554,6 +1560,7 @@ def stream_labels_on_keys(
             continue
         if key == "reset":
             initialize_cycle(ts_event)
+            print_legend()
             continue
         if key in ("label_correct", "label_incorrect", "label_undo"):
             if not recorder:
@@ -1678,6 +1685,7 @@ def main() -> None:
     if args.board_once:
         print(f"Capturing board once from window {window_id} ({app_name} – {win_name})")
         dump_board_state(window_id)
+        print_legend()
         return
 
     print(f"Monitoring window {window_id} ({app_name} – {win_name})")
