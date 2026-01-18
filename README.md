@@ -57,6 +57,13 @@ python3 window_stream.py --record-dataset datasets
    - Use arrow keys to play; each arrow capture becomes a dataset entry you can label.
    - Capture waits for the board to settle (defaults: 2 stable frames, threshold 0.15, timeout 1.0s). Tune with `--settle-*` flags if needed.
 
+Gray tile labeling (build 3+ dataset):
+```bash
+python3 extract_gray_tiles.py --session session_YYYYMMDD_HHMMSS
+```
+   - Outputs `datasets/gray_labels/<session>/tiles/` with extracted gray tiles and `sheets/` contact sheets.
+   - Fill `datasets/gray_labels/<session>/labels.csv` with numeric labels (3,6,12,24,48,96,192,384,768,1536).
+
 Optional polling mode (board diff):
 ```bash
 python3 window_stream.py --poll --poll-seconds 0.4
