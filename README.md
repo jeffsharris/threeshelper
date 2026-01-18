@@ -52,6 +52,7 @@ Dataset capture + labeling (arrow-key mode):
 python3 window_stream.py --record-dataset datasets
 ```
    - Creates `datasets/session_YYYYMMDD_HHMMSS/` with full screenshots, board crops, preview crops, and JSON metadata.
+   - Adds `*_board_overlay.png` with the inferred grid and per-cell stats in `*_meta.json` for debugging.
    - Label keys (global): `C`=correct, `X`=incorrect, `U`=undo label.
    - Use arrow keys to play; each arrow capture becomes a dataset entry you can label.
 

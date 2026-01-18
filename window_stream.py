@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 try:
     import imagehash
     HAVE_IMAGEHASH = True
@@ -432,13 +432,12 @@ def ocr_cell(cell: np.ndarray) -> str:
             os.remove(tmp_path)
         except Exception:
             pass
-def classify_board(arr: np.ndarray) -> List[List[str]]:
-    """
-    Return a 4x4 grid of classified cells using fixed 1/4 splits inside the board ROI.
-    A small inset is removed inside each cell to avoid tile borders.
-    """
-    roi, _box = find_board_roi(arr)
-    h, w, _ = roi.shape
+
+
+def _board_grid_params(
+    roi_shape: Tuple[int, int, int], inset_ratio: float = 0.0
+) -> Tuple[List[int], List[int], float, float]:
+    h, w, _ = roi_shape
     # Tiles are slightly taller than wide; fixed splits with offsets to reduce drift.
     base_cell_h = h / 4.0
     base_cell_w = w / 4.05  # small squeeze to reflect narrower width
@@ -446,10 +445,18 @@ def classify_board(arr: np.ndarray) -> List[List[str]]:
     offset_x = base_cell_w * 0.1  # shift tiles right by ~10% of a tile width
     cell_h = (h - offset_y) / 4.0 * 0.95  # reduce per-row vertical step to ease overlap
     cell_w = (w - offset_x) / 4.05
-    inset_y = 0.0
-    inset_x = 0.0
+    inset_y = cell_h * inset_ratio
+    inset_x = cell_w * inset_ratio
     xs = [int(offset_x + c * cell_w) for c in range(5)]
     ys = [int(offset_y + r * cell_h) for r in range(5)]
+    return xs, ys, inset_x, inset_y
+def classify_board(arr: np.ndarray) -> List[List[str]]:
+    """
+    Return a 4x4 grid of classified cells using fixed 1/4 splits inside the board ROI.
+    A small inset is removed inside each cell to avoid tile borders.
+    """
+    roi, _box = find_board_roi(arr)
+    xs, ys, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=0.0)
 
     grid: List[List[str]] = []
     for r in range(4):
@@ -472,18 +479,7 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
     Return list of (row, col, cell_array) using fixed 1/4 splits inside the board ROI.
     """
     roi, _box = find_board_roi(arr)
-    h, w, _ = roi.shape
-    base_cell_h = h / 4.0
-    base_cell_w = w / 4.05
-    offset_y = base_cell_h * 0.2
-    offset_x = base_cell_w * 0.1
-    cell_h = (h - offset_y) / 4.0 * 0.95  # reduce per-row vertical step to ease overlap
-    cell_w = (w - offset_x) / 4.05
-    inset_y = cell_h * inset_ratio
-    inset_x = cell_w * inset_ratio
-
-    xs = [int(offset_x + c * cell_w) for c in range(5)]
-    ys = [int(offset_y + r * cell_h) for r in range(5)]
+    xs, ys, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=inset_ratio)
 
     cells: List[Tuple[int, int, np.ndarray]] = []
     for r in range(4):
@@ -497,6 +493,28 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
             cell = roi[y0i:y1i, x0i:x1i]
             cells.append((r, c, cell))
     return cells
+
+
+def segment_board_cells_with_boxes(
+    arr: np.ndarray, inset_ratio: float = 0.0
+) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int], np.ndarray]], np.ndarray]:
+    """
+    Return list of (row, col, (x0,y0,x1,y1), cell_array) plus the board ROI.
+    """
+    roi, _box = find_board_roi(arr)
+    xs, ys, inset_x, inset_y = _board_grid_params(roi.shape, inset_ratio=inset_ratio)
+    cells: List[Tuple[int, int, Tuple[int, int, int, int], np.ndarray]] = []
+    for r in range(4):
+        y0, y1 = ys[r], ys[r + 1]
+        y0i = int(y0 + inset_y)
+        y1i = int(y1 - inset_y)
+        for c in range(4):
+            x0, x1 = xs[c], xs[c + 1]
+            x0i = int(x0 + inset_x)
+            x1i = int(x1 - inset_x)
+            cell = roi[y0i:y1i, x0i:x1i]
+            cells.append((r, c, (x0i, y0i, x1i, y1i), cell))
+    return cells, roi
 
 
 POOL_GRAY_TOKEN = "⬜️"
@@ -635,6 +653,54 @@ def _json_safe(obj: object) -> object:
     return obj
 
 
+def _saturation_and_value(arr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    arr = arr.astype(float)
+    mx = arr.max(axis=2)
+    mn = arr.min(axis=2)
+    diff = mx - mn
+    sat = np.zeros_like(mx)
+    nonzero = mx != 0
+    sat[nonzero] = diff[nonzero] / mx[nonzero]
+    return sat, mx
+
+
+def _cell_stats(cell: np.ndarray) -> Dict[str, float]:
+    """Compute stats aligned with classify_cell trimming and blank threshold."""
+    h, w, _ = cell.shape
+    mh = int(h * 0.08)
+    mw = int(w * 0.08)
+    trimmed = cell[mh : h - mh, mw : w - mw]
+    mean_rgb = trimmed.reshape(-1, 3).mean(axis=0)
+    mean_luma = float(0.2126 * mean_rgb[0] + 0.7152 * mean_rgb[1] + 0.0722 * mean_rgb[2])
+    sat, val = _saturation_and_value(trimmed)
+    stats = {
+        "mean_rgb": mean_rgb.tolist(),
+        "mean_luma": mean_luma,
+        "mean_sat": float(sat.mean()),
+        "mean_val": float(val.mean()),
+        "trim_mean": float(trimmed.reshape(-1, 3).mean()),
+    }
+    return stats
+
+
+def _draw_board_overlay(
+    board_roi: np.ndarray,
+    boxes: List[Tuple[int, int, Tuple[int, int, int, int]]],
+) -> Image.Image:
+    """Draw the inferred cell boxes on the board ROI for debugging."""
+    img = Image.fromarray(board_roi).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("Arial.ttf", 12)
+    except Exception:
+        font = ImageFont.load_default()
+    for r, c, box in boxes:
+        x0, y0, x1, y1 = box
+        draw.rectangle((x0, y0, x1, y1), outline=(255, 215, 0), width=2)
+        draw.text((x0 + 2, y0 + 2), f"{r},{c}", fill=(255, 255, 255), font=font)
+    return img
+
+
 class DatasetRecorder:
     """Record captures and labels to a session folder."""
 
@@ -667,6 +733,7 @@ class DatasetRecorder:
         prefix = f"{capture_id:06d}"
         full_path = self.session_dir / f"{prefix}_full.png"
         board_path = self.session_dir / f"{prefix}_board.png"
+        board_overlay_path = self.session_dir / f"{prefix}_board_overlay.png"
         preview_path = self.session_dir / f"{prefix}_preview.png"
         meta_path = self.session_dir / f"{prefix}_meta.json"
 
@@ -675,6 +742,26 @@ class DatasetRecorder:
         preview_roi, preview_box = find_preview_roi(arr)
         Image.fromarray(board_roi).save(board_path)
         Image.fromarray(preview_roi).save(preview_path)
+
+        xs, ys, inset_x, inset_y = _board_grid_params(board_roi.shape, inset_ratio=0.0)
+        boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+        cell_stats: List[Dict[str, object]] = []
+        for r in range(4):
+            y0, y1 = ys[r], ys[r + 1]
+            y0i = int(y0 + inset_y)
+            y1i = int(y1 - inset_y)
+            for c in range(4):
+                x0, x1 = xs[c], xs[c + 1]
+                x0i = int(x0 + inset_x)
+                x1i = int(x1 - inset_x)
+                box = (x0i, y0i, x1i, y1i)
+                cell = board_roi[y0i:y1i, x0i:x1i]
+                stats = _cell_stats(cell)
+                stats.update({"row": r, "col": c, "box": list(box)})
+                cell_stats.append(stats)
+                boxes.append((r, c, box))
+        overlay_img = _draw_board_overlay(board_roi, boxes)
+        overlay_img.save(board_overlay_path)
 
         meta = {
             "id": capture_id,
@@ -687,12 +774,14 @@ class DatasetRecorder:
             "paths": {
                 "full": full_path.name,
                 "board": board_path.name,
+                "board_overlay": board_overlay_path.name,
                 "preview": preview_path.name,
             },
             "roi": {
                 "board": board_box,
                 "preview": preview_box,
             },
+            "cell_stats": cell_stats,
             "preview_debug": preview_debug,
         }
         meta_path.write_text(json.dumps(_json_safe(meta), indent=2))
