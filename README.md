@@ -63,6 +63,11 @@ python3 extract_gray_tiles.py --session session_YYYYMMDD_HHMMSS
 ```
    - Outputs `datasets/gray_labels/<session>/tiles/` with extracted gray tiles and `sheets/` contact sheets.
    - Fill `datasets/gray_labels/<session>/labels.csv` with numeric labels (3,6,12,24,48,96,192,384,768,1536).
+   - Optional web labeler:
+     ```bash
+     python3 build_gray_labeler.py --labels-dir datasets/gray_labels/<session>
+     ```
+     Then open `datasets/gray_labels/<session>/labeler/index.html` and click “Save CSV”.
 
 Optional polling mode (board diff):
 ```bash

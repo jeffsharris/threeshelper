@@ -1,4 +1,5 @@
 import argparse
+import colorsys
 import json
 import os
 from pathlib import Path
@@ -87,6 +88,24 @@ def make_contact_sheets(
         page_idx += 1
 
 
+def is_gray_candidate(cell: np.ndarray, blank_threshold: float = 60.0) -> bool:
+    h, w, _ = cell.shape
+    mh = int(h * 0.08)
+    mw = int(w * 0.08)
+    trimmed = cell[mh : h - mh, mw : w - mw]
+    mean_rgb = trimmed.reshape(-1, 3).mean(axis=0)
+    if trimmed.reshape(-1, 3).mean() < blank_threshold:
+        return False
+    red_dist = float(np.linalg.norm(mean_rgb - ws.BOARD_COLOR_PROTOTYPES["red"]))
+    blue_dist = float(np.linalg.norm(mean_rgb - ws.BOARD_COLOR_PROTOTYPES["blue"]))
+    # If strongly close to red/blue with sufficient saturation, skip.
+    r, g, b = (mean_rgb / 255.0).tolist()
+    _h, s, _v = colorsys.rgb_to_hsv(r, g, b)
+    if s > 0.18 and (red_dist < 80 or blue_dist < 80):
+        return False
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract gray tiles into labeled sheets.")
     parser.add_argument(
@@ -110,6 +129,18 @@ def main() -> None:
         type=int,
         default=96,
         help="Square size in pixels for extracted tile images.",
+    )
+    parser.add_argument(
+        "--inset-ratio",
+        type=float,
+        default=0.12,
+        help="Inset ratio inside each cell to avoid neighboring tiles.",
+    )
+    parser.add_argument(
+        "--blank-threshold",
+        type=float,
+        default=60.0,
+        help="Mean brightness threshold to treat a tile as non-empty.",
     )
     parser.add_argument(
         "--sheet-cols",
@@ -162,11 +193,13 @@ def main() -> None:
             continue
         arr = np.array(full_img)
         grid = ws.classify_board(arr)
-        cells, _roi = ws.segment_board_cells_with_boxes(arr)
+        cells, _roi = ws.segment_board_cells_with_boxes(arr, inset_ratio=args.inset_ratio)
         capture_id = int(meta.get("id", 0))
         for r, c, _box, cell in cells:
             token = grid[r][c] if r < len(grid) and c < len(grid[r]) else "?"
             if token in (ws.SMALL_COLOR_MAP["red"], ws.SMALL_COLOR_MAP["blue"], ws.TOKEN_EMPTY):
+                continue
+            if not is_gray_candidate(cell, blank_threshold=args.blank_threshold):
                 continue
             tile_id = f"{capture_id:06d}_r{r}_c{c}"
             tile_path = tiles_dir / f"{tile_id}.png"
