@@ -191,6 +191,7 @@ TOKEN_OTHER = "X"
 BLANK_MEAN_THRESHOLD = 80.0  # calibrated from provided blank tiles (was 50)
 # Keep classification cells inset to match gray-tile extraction/training.
 CLASSIFY_INSET_RATIO = 0.12
+UNKNOWN_TILE_SIZE = 96
 BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),
     "blue": np.array([132.33, 198.81, 243.71]),
@@ -1025,8 +1026,12 @@ class DatasetRecorder:
         self.session_dir.mkdir(parents=True, exist_ok=False)
         self.manifest_path = self.session_dir / "manifest.jsonl"
         self.labels_path = self.session_dir / "labels.jsonl"
+        self.unknown_tiles_dir = self.session_dir / "unknown_tiles"
+        self.unknown_tiles_dir.mkdir(parents=True, exist_ok=True)
+        self.unknown_index_path = self.session_dir / "unknown_tiles.jsonl"
         self.capture_idx = 0
         self.last_capture_id: Optional[int] = None
+        self.last_unknown_count = 0
         meta = {
             "created": _iso_ts(),
             "window": window_info or {},
@@ -1059,10 +1064,11 @@ class DatasetRecorder:
         Image.fromarray(preview_roi).save(preview_path)
 
         xs, ys, inset_x, inset_y, grid_meta = _refine_grid_params(
-            board_roi, inset_ratio=0.0
+            board_roi, inset_ratio=CLASSIFY_INSET_RATIO
         )
         boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
         cell_stats: List[Dict[str, object]] = []
+        cells: List[Tuple[int, int, np.ndarray]] = []
         for r in range(4):
             y0, y1 = ys[r], ys[r + 1]
             y0i = int(y0 + inset_y)
@@ -1077,11 +1083,44 @@ class DatasetRecorder:
                 stats.update({"row": r, "col": c, "box": list(box)})
                 cell_stats.append(stats)
                 boxes.append((r, c, box))
+                cells.append((r, c, cell))
         overlay_img = _draw_board_overlay(board_roi, boxes)
         overlay_img.save(board_overlay_path)
         blank_threshold = _dynamic_blank_threshold(
             [float(stat["trim_mean"]) for stat in cell_stats], BLANK_MEAN_THRESHOLD
         )
+
+        unknown_tiles: List[str] = []
+        unknown_entries: List[Dict[str, object]] = []
+        for r, c, cell in cells:
+            if r >= len(board) or c >= len(board[r]):
+                continue
+            if board[r][c] != TOKEN_OTHER:
+                continue
+            tile_id = f"{capture_id:06d}_r{r}_c{c}"
+            tile_path = self.unknown_tiles_dir / f"{tile_id}.png"
+            tile_img = Image.fromarray(cell).resize(
+                (UNKNOWN_TILE_SIZE, UNKNOWN_TILE_SIZE), Image.BILINEAR
+            )
+            tile_img.save(tile_path)
+            unknown_tiles.append(tile_id)
+            unknown_entries.append(
+                {
+                    "tile_id": tile_id,
+                    "capture_id": capture_id,
+                    "row": r,
+                    "col": c,
+                    "source": full_path.name,
+                    "image": tile_path.name,
+                }
+            )
+
+        if unknown_entries:
+            with self.unknown_index_path.open("a") as f:
+                for entry in unknown_entries:
+                    f.write(json.dumps(_json_safe(entry)) + "\n")
+
+        self.last_unknown_count = len(unknown_tiles)
 
         meta = {
             "id": capture_id,
@@ -1091,6 +1130,8 @@ class DatasetRecorder:
             "label": None,
             "board": board,
             "preview_label": preview_label,
+            "unknown_tiles": unknown_tiles,
+            "unknown_count": len(unknown_tiles),
             "paths": {
                 "full": full_path.name,
                 "board": board_path.name,
@@ -1643,7 +1684,10 @@ def stream_labels_on_keys(
         print(f"[{ts}]")
         print(render_move_table(board, label, tile_cycle))
         if recorder and capture_id is not None:
-            print(f"capture={capture_id} label=unlabeled")
+            extra = ""
+            if recorder.last_unknown_count:
+                extra = f" unknown={recorder.last_unknown_count}"
+            print(f"capture={capture_id} label=unlabeled{extra}")
         print()
 
     # Initial capture seeds the cycle with the 8 on-board + preview (9th) tiles.
