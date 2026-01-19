@@ -191,8 +191,9 @@ CELL_GRAY_TOKEN = "3"
 TOKEN_EMPTY = "·"
 TOKEN_OTHER = "X"
 BLANK_MEAN_THRESHOLD = 80.0  # calibrated from provided blank tiles (was 50)
-# Keep classification cells inset to match gray-tile extraction/training.
+# Use the same inset for gray digits and color checks to match training crops.
 CLASSIFY_INSET_RATIO = 0.12
+GRAY_INSET_RATIO = CLASSIFY_INSET_RATIO
 UNKNOWN_TILE_SIZE = 96
 BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),
@@ -550,6 +551,7 @@ def classify_cell(
     blank_threshold: float,
     color_prototypes: Optional[Dict[str, np.ndarray]] = None,
     hsv_prototypes: Optional[Dict[str, Tuple[float, float, float]]] = None,
+    gray_cell: Optional[np.ndarray] = None,
 ) -> str:
     """
     Classify a single tile cell into: red, blue, empty (·), or gray-as-X.
@@ -600,10 +602,11 @@ def classify_cell(
         return SMALL_COLOR_MAP["blue"]
 
     # Everything else is gray => attempt numeric label, then fallback to 3 detector.
-    gray_label = classify_gray_tile(original)
+    gray_source = gray_cell if gray_cell is not None else original
+    gray_label = classify_gray_tile(gray_source)
     if gray_label:
         return gray_label
-    if is_three_by_template(original) or is_three_by_hash(original):
+    if is_three_by_template(gray_source) or is_three_by_hash(gray_source):
         return CELL_GRAY_TOKEN
     return TOKEN_OTHER
 
@@ -735,9 +738,13 @@ def classify_board(arr: np.ndarray) -> List[List[str]]:
     xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(
         roi, inset_ratio=CLASSIFY_INSET_RATIO
     )
+    _xs_g, _ys_g, inset_x_g, inset_y_g, _grid_meta_g = _refine_grid_params(
+        roi, inset_ratio=GRAY_INSET_RATIO
+    )
 
     # Precompute cell brightness values to derive an adaptive blank threshold.
     cells: List[Tuple[int, int, np.ndarray]] = []
+    gray_cells: Dict[Tuple[int, int], np.ndarray] = {}
     cell_means: List[float] = []
     for r in range(4):
         y0, y1 = ys[r], ys[r + 1]
@@ -751,11 +758,21 @@ def classify_board(arr: np.ndarray) -> List[List[str]]:
             stats = _cell_stats(cell)
             cell_means.append(float(stats["trim_mean"]))
             cells.append((r, c, cell))
+            # Wider crop for gray digits.
+            y0g = int(ys[r] + inset_y_g)
+            y1g = int(ys[r + 1] - inset_y_g)
+            x0g = int(xs[c] + inset_x_g)
+            x1g = int(xs[c + 1] - inset_x_g)
+            gray_cells[(r, c)] = roi[y0g:y1g, x0g:x1g]
     blank_threshold = _dynamic_blank_threshold(cell_means, BLANK_MEAN_THRESHOLD)
 
     grid: List[List[str]] = [["" for _ in range(4)] for _ in range(4)]
     for r, c, cell in cells:
-        grid[r][c] = classify_cell(cell, blank_threshold=blank_threshold)
+        grid[r][c] = classify_cell(
+            cell,
+            blank_threshold=blank_threshold,
+            gray_cell=gray_cells.get((r, c)),
+        )
     return grid
 
 
@@ -1077,6 +1094,9 @@ class DatasetRecorder:
         xs, ys, inset_x, inset_y, grid_meta = _refine_grid_params(
             board_roi, inset_ratio=CLASSIFY_INSET_RATIO
         )
+        xs_g, ys_g, inset_x_g, inset_y_g, _grid_meta_g = _refine_grid_params(
+            board_roi, inset_ratio=GRAY_INSET_RATIO
+        )
         boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
         cell_stats: List[Dict[str, object]] = []
         cells: List[Tuple[int, int, np.ndarray]] = []
@@ -1094,7 +1114,13 @@ class DatasetRecorder:
                 stats.update({"row": r, "col": c, "box": list(box)})
                 cell_stats.append(stats)
                 boxes.append((r, c, box))
-                cells.append((r, c, cell))
+                # Gray tiles get a wider crop for digit recognition.
+                y0g = int(ys_g[r] + inset_y_g)
+                y1g = int(ys_g[r + 1] - inset_y_g)
+                x0g = int(xs_g[c] + inset_x_g)
+                x1g = int(xs_g[c + 1] - inset_x_g)
+                cell_gray = board_roi[y0g:y1g, x0g:x1g]
+                cells.append((r, c, cell_gray))
         overlay_img = _draw_board_overlay(board_roi, boxes)
         overlay_img.save(board_overlay_path)
         blank_threshold = _dynamic_blank_threshold(

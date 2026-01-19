@@ -4,27 +4,16 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-import numpy as np
-from PIL import Image
 
-import gray_hog as gh
-import window_stream as ws
-
-
-def find_latest_session(base_dir: Path) -> Path:
-    sessions = sorted([p for p in base_dir.iterdir() if p.is_dir() and p.name.startswith("session_")])
-    if not sessions:
-        raise FileNotFoundError(f"No sessions found in {base_dir}")
-    return sessions[-1]
-
-
-def write_labels_csv(path: Path, tile_ids: List[str]) -> None:
-    if path.exists():
-        return
-    with path.open("w") as f:
-        f.write("tile_id,label\n")
-        for tile_id in tile_ids:
-            f.write(f"{tile_id},\n")
+def load_index(index_path: Path) -> Dict[str, Dict[str, str]]:
+    entries: Dict[str, Dict[str, str]] = {}
+    for line in index_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        entry = json.loads(line)
+        entries[entry["tile_id"]] = entry
+    return entries
 
 
 def load_labels(labels_path: Path) -> Dict[str, str]:
@@ -64,7 +53,7 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Gray Tile Review</title>
+  <title>Gray Tile Focus Review</title>
   <style>
     body { font-family: Helvetica, Arial, sans-serif; background: #12121a; color: #e6e6f0; margin: 20px; }
     h1 { margin: 0 0 10px 0; }
@@ -80,7 +69,7 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
   </style>
 </head>
 <body>
-  <h1>Gray Tile Review</h1>
+  <h1>Gray Tile Focus Review</h1>
   <div class="controls">
     <button id="save">Save CSV</button>
     <button id="saveJson" class="secondary">Save JSON</button>
@@ -143,12 +132,12 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
     }
 
     document.getElementById('save').addEventListener('click', () => {
-      download('gray_review_labels.csv', buildCsv());
+      download('gray_focus_labels.csv', buildCsv());
     });
 
     document.getElementById('saveJson').addEventListener('click', () => {
       const rows = gatherRows();
-      download('gray_review_labels.json', JSON.stringify(rows, null, 2));
+      download('gray_focus_labels.json', JSON.stringify(rows, null, 2));
     });
 
     document.getElementById('fillCsv').addEventListener('click', () => {
@@ -175,96 +164,40 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a review UI for gray tile predictions.")
+    parser = argparse.ArgumentParser(description="Build a focused review UI for specific tiles.")
+    parser.add_argument("--session", type=Path, required=True, help="Session path.")
     parser.add_argument(
-        "--session",
-        type=Path,
-        help="Path to datasets/session_YYYYMMDD_HHMMSS. Defaults to latest.",
+        "--tile-ids",
+        type=str,
+        required=True,
+        help="Comma-separated tile ids to include.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        help="Output HTML path (default: <session>/gray_review/index.html).",
+        help="Output HTML path (default: <session>/gray_review/focus.html).",
     )
     args = parser.parse_args()
 
-    base_dir = Path("datasets")
-    session_dir = args.session or find_latest_session(base_dir)
-    if not session_dir.exists():
-        raise FileNotFoundError(f"Session not found: {session_dir}")
-
-    model = gh.load_model()
-    if not model:
-        raise RuntimeError("Missing gray_tile_hog.json. Run train_gray_hog.py first.")
-
-    tiles_dir = session_dir / "gray_review_tiles"
-    tiles_dir.mkdir(parents=True, exist_ok=True)
+    session_dir = args.session
     index_path = session_dir / "gray_review_index.jsonl"
-    labels_path = session_dir / "gray_review_labels.csv"
-
-    tiles: List[Dict[str, str]] = []
-    for meta_path in sorted(session_dir.glob("*_meta.json")):
-        meta = json.loads(meta_path.read_text())
-        full_path = session_dir / meta["paths"]["full"]
-        arr = np.array(Image.open(full_path).convert("RGB"))
-        cells_color, _roi = ws.segment_board_cells_with_boxes(
-            arr, inset_ratio=ws.CLASSIFY_INSET_RATIO
-        )
-        cells_gray, _roi_g = ws.segment_board_cells_with_boxes(
-            arr, inset_ratio=ws.GRAY_INSET_RATIO
-        )
-        # Build color-only classification to filter non-gray.
-        cell_means = []
-        cells_list = []
-        gray_lookup = {(r, c): cell for r, c, _box, cell in cells_gray}
-        for r, c, _box, cell in cells_color:
-            cell_means.append(float(ws._cell_stats(cell)["trim_mean"]))
-            cells_list.append((r, c, cell))
-        blank_threshold = ws._dynamic_blank_threshold(cell_means, ws.BLANK_MEAN_THRESHOLD)
-
-        capture_id = int(meta.get("id", 0))
-        for r, c, cell in cells_list:
-            tok = ws.classify_cell(
-                cell,
-                blank_threshold=blank_threshold,
-                gray_cell=gray_lookup.get((r, c)),
-            )
-            if tok in (ws.SMALL_COLOR_MAP["red"], ws.SMALL_COLOR_MAP["blue"], ws.TOKEN_EMPTY):
-                continue
-            tile_id = f"{capture_id:06d}_r{r}_c{c}"
-            tile_path = tiles_dir / f"{tile_id}.png"
-            if not tile_path.exists():
-                Image.fromarray(gray_lookup.get((r, c), cell)).resize(
-                    (96, 96), Image.BILINEAR
-                ).save(tile_path)
-            pred = (
-                gh.predict_label(gray_lookup.get((r, c), cell), model, use_thresholds=False)
-                or "X"
-            )
-            tiles.append(
-                {
-                    "tile_id": tile_id,
-                    "image": tile_path.name,
-                    "predicted": pred,
-                }
-            )
-
-    with index_path.open("w") as f:
-        for entry in tiles:
-            f.write(json.dumps(entry) + "\n")
-
-    tile_ids = [t["tile_id"] for t in tiles]
-    write_labels_csv(labels_path, tile_ids)
+    labels_path = session_dir / "gray_review" / "gray_review_labels.csv"
+    index = load_index(index_path)
     labels = load_labels(labels_path)
-    html = render_html(tiles, labels)
 
-    if args.out:
-        out_path = args.out
-    else:
-        out_path = session_dir / "gray_review" / "index.html"
+    tile_ids = [t.strip() for t in args.tile_ids.split(",") if t.strip()]
+    tiles: List[Dict[str, str]] = []
+    for tile_id in tile_ids:
+        entry = index.get(tile_id)
+        if not entry:
+            continue
+        tiles.append(entry)
+
+    html = render_html(tiles, labels)
+    out_path = args.out or (session_dir / "gray_review" / "focus.html")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
-    print(f"Wrote review to {out_path}")
+    print(f"Wrote focus review to {out_path}")
 
 
 if __name__ == "__main__":

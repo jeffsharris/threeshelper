@@ -43,10 +43,21 @@ def normalize_glyph(
     mh = int(h * margin)
     img = img.crop((mw, mh, w - mw, h - mh))
     img = ImageOps.autocontrast(img)
-    arr = np.array(img, dtype=np.uint8)
-    t = _otsu_threshold(arr)
-    mask = arr < t  # digits are dark
-    coords = np.argwhere(mask)
+    arr = np.array(img, dtype=np.float32)
+    # Use edges to locate glyphs regardless of light/dark text.
+    gx = np.zeros_like(arr)
+    gy = np.zeros_like(arr)
+    gx[:, 1:-1] = arr[:, 2:] - arr[:, :-2]
+    gy[1:-1, :] = arr[2:, :] - arr[:-2, :]
+    grad = np.hypot(gx, gy)
+    thresh = np.percentile(grad, 85)
+    edge_mask = grad > thresh
+    coords = np.argwhere(edge_mask)
+    if len(coords) <= 12:
+        # Fallback to Otsu on intensity if edges are sparse.
+        t = _otsu_threshold(arr.astype(np.uint8))
+        mask = arr < t
+        coords = np.argwhere(mask)
     if len(coords) > 12:
         y0, x0 = coords.min(axis=0)
         y1, x1 = coords.max(axis=0)
@@ -213,7 +224,6 @@ def predict_label(
     }
     if not mean_vectors:
         return None
-
     sims = [(lab, float(np.dot(feat, vec))) for lab, vec in mean_vectors.items()]
     sims.sort(key=lambda x: x[1], reverse=True)
     best_label, best_score = sims[0]
