@@ -13,6 +13,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+import gray_hog as gh
 try:
     import imagehash
     HAVE_IMAGEHASH = True
@@ -370,6 +372,11 @@ def is_three_by_template(cell: np.ndarray) -> bool:
 
 def classify_gray_tile(cell: np.ndarray) -> Optional[str]:
     """Return a numeric gray-tile label if confidently matched."""
+    hog_model = gh.load_model()
+    if hog_model:
+        label = gh.predict_label(cell, hog_model, use_thresholds=True)
+        if label:
+            return label
     data = load_gray_detector()
     if not data:
         return None
@@ -934,12 +941,16 @@ def print_error(msg: str) -> None:
 def print_legend() -> None:
     """Print a legend for board tokens."""
     labels: List[str] = []
-    data = load_gray_detector()
-    if data:
-        for det in data.get("detectors", []):
-            for label in det.get("labels", {}).keys():
-                if label not in labels:
-                    labels.append(str(label))
+    hog_model = gh.load_model()
+    if hog_model:
+        labels = [str(label) for label in hog_model.get("labels", [])]
+    else:
+        data = load_gray_detector()
+        if data:
+            for det in data.get("detectors", []):
+                for label in det.get("labels", {}).keys():
+                    if label not in labels:
+                        labels.append(str(label))
     if labels:
         try:
             labels.sort(key=lambda x: int(x))
