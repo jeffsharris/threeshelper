@@ -12,17 +12,6 @@ def find_latest_session(base_dir: Path) -> Path:
     return sessions[-1]
 
 
-def load_index(index_path: Path) -> List[Dict[str, str]]:
-    entries: List[Dict[str, str]] = []
-    for line in index_path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        entry = json.loads(line)
-        entries.append(entry)
-    return entries
-
-
 def load_labels(labels_path: Path) -> Dict[str, str]:
     if not labels_path.exists():
         return {}
@@ -37,26 +26,43 @@ def load_labels(labels_path: Path) -> Dict[str, str]:
     return labels
 
 
-def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
-    allowed = ["3", "6", "12", "24", "48", "96", "192", "384", "768", "1536", "3072"]
-    tiles_data = [
-        {
-            "tile_id": t["tile_id"],
-            "image": t["image"],
-        }
-        for t in tiles
-    ]
+def load_previews(session_dir: Path) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    for preview_path in sorted(session_dir.glob("*_preview.png")):
+        prefix = preview_path.stem.replace("_preview", "")
+        meta_path = session_dir / f"{prefix}_meta.json"
+        predicted = ""
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                predicted = str(meta.get("preview_label", ""))
+            except Exception:
+                predicted = ""
+        entries.append(
+            {
+                "tile_id": prefix,
+                "image": preview_path.name,
+                "predicted": predicted,
+            }
+        )
+    return entries
+
+
+def render_html(entries: List[Dict[str, str]], labels: Dict[str, str]) -> str:
+    allowed = ["red", "blue", "gray", "large_candidates", "unknown"]
     options = "".join(f'<option value="{x}"></option>' for x in allowed)
     rows_html = []
-    for t in tiles_data:
-        tile_id = t["tile_id"]
-        image = t["image"]
+    for entry in entries:
+        tile_id = entry["tile_id"]
+        image = entry["image"]
+        predicted = entry.get("predicted", "")
         label = labels.get(tile_id, "")
         row = (
             '<div class="row">'
-            f'<img src="../unknown_tiles/{image}" alt="{tile_id}" />'
+            f'<img src="../{image}" alt="{tile_id}" />'
             f'<div class="tile-id">{tile_id}</div>'
-            f'<input type="text" list="numbers" value="{label}" />'
+            f'<div class="pred">{predicted}</div>'
+            f'<input type="text" list="labels" value="{label}" />'
             "</div>"
         )
         rows_html.append(row)
@@ -65,22 +71,25 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Unknown Tile Labeler</title>
+  <title>Preview Tile Review</title>
   <style>
     body { font-family: Helvetica, Arial, sans-serif; background: #12121a; color: #e6e6f0; margin: 20px; }
-    h1 { margin: 0 0 10px 0; }
+    h1 { margin: 0 0 6px 0; }
+    .hint { color: #a8a8bf; margin-bottom: 12px; }
     .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
     .row { display: flex; align-items: center; gap: 14px; margin: 8px 0; padding: 6px; background: #1c1c26; border-radius: 6px; }
-    .tile-id { font-family: ui-monospace, Menlo, monospace; width: 130px; color: #c7c7d6; }
-    img { width: 72px; height: 72px; border: 1px solid #34344a; border-radius: 4px; background: #202030; }
-    input { width: 80px; padding: 6px; font-size: 14px; background: #10101a; color: #e6e6f0; border: 1px solid #3a3a52; border-radius: 4px; }
+    .tile-id { font-family: ui-monospace, Menlo, monospace; width: 90px; color: #c7c7d6; }
+    .pred { width: 120px; font-weight: bold; color: #f5c16c; }
+    img { width: 120px; height: 48px; border: 1px solid #34344a; border-radius: 4px; background: #202030; object-fit: contain; }
+    input { width: 140px; padding: 6px; font-size: 14px; background: #10101a; color: #e6e6f0; border: 1px solid #3a3a52; border-radius: 4px; }
     button { padding: 8px 12px; background: #2e7d32; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
     button.secondary { background: #3949ab; }
     .status { color: #a8a8bf; }
   </style>
 </head>
 <body>
-  <h1>Unknown Tile Labeler</h1>
+  <h1>Preview Tile Review</h1>
+  <div class="hint">Leave the label blank if the prediction is correct. If downloads fail, use Copy CSV or open this page via <code>python3 -m http.server</code>.</div>
   <div class="controls">
     <button id="save">Save CSV</button>
     <button id="saveJson" class="secondary">Save JSON</button>
@@ -89,7 +98,7 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
     <span id="status" class="status"></span>
   </div>
   <textarea id="csvOutput" rows="6" style="width: 100%; margin-bottom: 12px; background: #10101a; color: #e6e6f0; border: 1px solid #3a3a52; border-radius: 6px; padding: 8px;"></textarea>
-  <datalist id="numbers">
+  <datalist id="labels">
     __OPTIONS__
   </datalist>
   <div id="list">
@@ -143,12 +152,12 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
     }
 
     document.getElementById('save').addEventListener('click', () => {
-      download('unknown_labels.csv', buildCsv());
+      download('preview_review_labels.csv', buildCsv());
     });
 
     document.getElementById('saveJson').addEventListener('click', () => {
       const rows = gatherRows();
-      download('unknown_labels.json', JSON.stringify(rows, null, 2));
+      download('preview_review_labels.json', JSON.stringify(rows, null, 2));
     });
 
     document.getElementById('fillCsv').addEventListener('click', () => {
@@ -175,7 +184,7 @@ def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a labeler for unknown tiles in a session.")
+    parser = argparse.ArgumentParser(description="Build a labeler for preview tiles.")
     parser.add_argument(
         "--session",
         type=Path,
@@ -184,7 +193,7 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=Path,
-        help="Output HTML path (default: <session>/unknown_labeler/index.html).",
+        help="Output HTML path (default: <session>/preview_review/index.html).",
     )
     args = parser.parse_args()
 
@@ -193,23 +202,18 @@ def main() -> None:
     if not session_dir.exists():
         raise FileNotFoundError(f"Session not found: {session_dir}")
 
-    index_path = session_dir / "unknown_tiles.jsonl"
-    labels_path = session_dir / "unknown_labels.csv"
-    if not index_path.exists():
-        raise FileNotFoundError(f"Missing unknown tiles index: {index_path}")
+    entries = load_previews(session_dir)
+    if not entries:
+        raise FileNotFoundError(f"No preview tiles found in {session_dir}")
 
-    tiles = load_index(index_path)
+    labels_path = session_dir / "preview_review" / "preview_review_labels.csv"
     labels = load_labels(labels_path)
-    html = render_html(tiles, labels)
+    html = render_html(entries, labels)
 
-    if args.out:
-        out_path = args.out
-    else:
-        out_path = session_dir / "unknown_labeler" / "index.html"
-
+    out_path = args.out or (session_dir / "preview_review" / "index.html")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
-    print(f"Wrote labeler to {out_path}")
+    print(f"Wrote preview review page to {out_path}")
 
 
 if __name__ == "__main__":

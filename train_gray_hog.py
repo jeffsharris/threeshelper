@@ -71,6 +71,12 @@ def main() -> None:
     parser.add_argument("--cell-size", type=int, default=8)
     parser.add_argument("--bins", type=int, default=9)
     parser.add_argument(
+        "--top-k",
+        type=int,
+        default=3,
+        help="Top-k neighbors for the kNN vote (default: 3).",
+    )
+    parser.add_argument(
         "--score-threshold",
         type=float,
         default=0.4,
@@ -105,6 +111,7 @@ def main() -> None:
         size=args.size,
         cell_size=args.cell_size,
         bins=args.bins,
+        top_k=args.top_k,
         score_threshold=args.score_threshold,
         margin_threshold=args.margin_threshold,
     )

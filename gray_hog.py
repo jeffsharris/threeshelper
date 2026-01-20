@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import colorsys
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -29,6 +30,22 @@ def _otsu_threshold(arr: np.ndarray) -> int:
             max_var = var_between
             threshold = t
     return threshold
+
+
+def yellow_ratio(cell: np.ndarray) -> float:
+    """Estimate fraction of yellow digits based on bright pixels in HSV."""
+    arr = cell.astype(np.float32) / 255.0
+    bright = arr.mean(axis=2)
+    thresh = np.percentile(bright, 95)
+    mask = bright > thresh
+    if mask.sum() == 0:
+        return 0.0
+    pixels = arr[mask]
+    hsv = np.array([colorsys.rgb_to_hsv(*p) for p in pixels], dtype=np.float32)
+    h = hsv[:, 0]
+    s = hsv[:, 1]
+    yellow = (h > 0.10) & (h < 0.18) & (s > 0.2)
+    return float(yellow.mean())
 
 
 def normalize_glyph(
@@ -125,14 +142,25 @@ def train_hog_model(
     size: int = 32,
     cell_size: int = 8,
     bins: int = 9,
+    top_k: int = 3,
     score_threshold: Optional[float] = None,
     margin_threshold: Optional[float] = None,
 ) -> Dict[str, object]:
     feats_by_label: Dict[str, List[np.ndarray]] = {}
+    yellow_by_label: Dict[str, List[float]] = {}
+    sample_vectors: List[Dict[str, object]] = []
     for cell, label in samples:
         glyph = normalize_glyph(cell, margin=margin, size=size)
         feat = hog_features(glyph, cell_size=cell_size, bins=bins)
-        feats_by_label.setdefault(label, []).append(_normalize_vec(feat))
+        vec = _normalize_vec(feat)
+        feats_by_label.setdefault(label, []).append(vec)
+        yellow_by_label.setdefault(label, []).append(yellow_ratio(cell))
+        sample_vectors.append(
+            {
+                "label": label,
+                "vec": vec.tolist(),
+            }
+        )
 
     mean_vectors: Dict[str, List[float]] = {}
     stats: Dict[str, Dict[str, float]] = {}
@@ -141,7 +169,10 @@ def train_hog_model(
         mat = np.stack(feats, axis=0)
         mean = _normalize_vec(mat.mean(axis=0))
         mean_vectors[label] = mean.tolist()
+        yellow_vals = yellow_by_label.get(label, [])
         stats[label] = {"count": float(len(feats))}
+        if yellow_vals:
+            stats[label]["yellow_mean"] = float(np.mean(yellow_vals))
 
     # Evaluate thresholds from training data
     labels = list(mean_vectors.keys())
@@ -168,11 +199,13 @@ def train_hog_model(
     model = {
         "labels": labels,
         "mean_vectors": mean_vectors,
+        "samples": sample_vectors,
         "params": {
             "margin": margin,
             "size": size,
             "cell_size": cell_size,
             "bins": bins,
+            "top_k": top_k,
         },
         "score_threshold": score_threshold,
         "margin_threshold": margin_threshold,
@@ -182,6 +215,11 @@ def train_hog_model(
         },
         "stats": stats,
     }
+    # Labels with yellow digits (used to gate candidates).
+    yellow_labels = [
+        label for label, info in stats.items() if info.get("yellow_mean", 0.0) > 0.5
+    ]
+    model["yellow_labels"] = yellow_labels
     return model
 
 
@@ -205,12 +243,14 @@ def predict_label(
     cell: np.ndarray,
     model: Dict[str, object],
     use_thresholds: bool = True,
+    top_k: int = 3,
 ) -> Optional[str]:
     params = model.get("params", {})
     margin = float(params.get("margin", 0.1))
     size = int(params.get("size", 32))
     cell_size = int(params.get("cell_size", 8))
     bins = int(params.get("bins", 9))
+    top_k = int(params.get("top_k", top_k))
 
     glyph = normalize_glyph(cell, margin=margin, size=size)
     feat = hog_features(glyph, cell_size=cell_size, bins=bins)
@@ -218,22 +258,51 @@ def predict_label(
         return None
     feat = _normalize_vec(feat)
 
-    mean_vectors = {
-        label: np.array(vec, dtype=np.float32)
-        for label, vec in model.get("mean_vectors", {}).items()
-    }
-    if not mean_vectors:
+    samples = model.get("samples", [])
+    if not samples:
+        mean_vectors = {
+            label: np.array(vec, dtype=np.float32)
+            for label, vec in model.get("mean_vectors", {}).items()
+        }
+        if not mean_vectors:
+            return None
+        sims = [(lab, float(np.dot(feat, vec))) for lab, vec in mean_vectors.items()]
+    else:
+        is_yellow = yellow_ratio(cell) > 0.5
+        yellow_labels = set(model.get("yellow_labels", []))
+        sims = []
+        for sample in samples:
+            label = str(sample.get("label"))
+            if yellow_labels:
+                if is_yellow and label not in yellow_labels:
+                    continue
+                if not is_yellow and label in yellow_labels:
+                    continue
+            vec = np.array(sample.get("vec", []), dtype=np.float32)
+            if vec.size == 0:
+                continue
+            sims.append((label, float(np.dot(feat, vec))))
+    if not sims:
         return None
-    sims = [(lab, float(np.dot(feat, vec))) for lab, vec in mean_vectors.items()]
     sims.sort(key=lambda x: x[1], reverse=True)
     best_label, best_score = sims[0]
     second_score = sims[1][1] if len(sims) > 1 else -1.0
 
+    if samples:
+        # Use a weighted vote over the top-k neighbors to reduce tie bias.
+        top = sims[: max(1, top_k)]
+        totals: Dict[str, float] = {}
+        for label, score in top:
+            totals[label] = totals.get(label, 0.0) + score
+        best_label = max(totals.items(), key=lambda x: x[1])[0]
+        best_score = max(score for _label, score in top)
+        second_score = 0.0
     if use_thresholds:
         score_threshold = float(model.get("score_threshold", 0.0))
-        margin_threshold = float(model.get("margin_threshold", 0.0))
         if best_score < score_threshold:
             return None
-        if (best_score - second_score) < margin_threshold:
-            return None
+        if not samples:
+            margin_threshold = float(model.get("margin_threshold", 0.0))
+            if (best_score - second_score) < margin_threshold:
+                return None
     return str(best_label)

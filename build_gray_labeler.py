@@ -39,7 +39,7 @@ def load_labels(labels_path: Path) -> Dict[str, str]:
 
 
 def render_html(tiles: List[Dict[str, str]], labels: Dict[str, str]) -> str:
-    allowed = ["3", "6", "12", "24", "48", "96", "192", "384", "768", "1536"]
+    allowed = ["3", "6", "12", "24", "48", "96", "192", "384", "768", "1536", "3072"]
     tiles_data = [
         {
             "tile_id": t["tile_id"],
