@@ -44,7 +44,7 @@ python3 window_stream.py
      - `Z`: undo the last move (useful if an arrow key was a no-op).
      - `Q`: reset to a fresh game; the current visible preview becomes tile 1 of the new 12-tile batch.
    - Requires Quartz (pyobjc-framework-Quartz) and likely Input Monitoring/Accessibility permission for your terminal/IDE to see key events.
-   - If you see “old” previews (race with animation), add a small delay before capture: `--arrow-delay 0.1` (default 0.1).
+   - If you see “old” previews (race with animation), add a small delay before capture: `--arrow-delay 0.1` (default 0.05).
    - Auto-selects the first window whose title starts with `iPhone Mirroring`. Override with `--auto-window-prefix ""` to disable or another prefix to target a different window.
 
 Dataset capture + labeling (arrow-key mode):
@@ -108,7 +108,7 @@ python3 window_stream.py
      - `Z`: undo the last move (useful if an arrow key was a no-op).
      - `Q`: reset to a fresh game; the current visible preview becomes tile 1 of the new 12-tile batch.
    - Requires Quartz (pyobjc-framework-Quartz) and likely Input Monitoring/Accessibility permission for your terminal/IDE to see key events.
-   - If you see “old” previews (race with animation), add a small delay before capture: `--arrow-delay 0.1` (default 0.1).
+   - If you see “old” previews (race with animation), add a small delay before capture: `--arrow-delay 0.1` (default 0.05).
 
 Optional: if you already know the window id (from `osascript`/`yabai`/`chunkwm`), pass `--window-id <id>` to skip the chooser.
 

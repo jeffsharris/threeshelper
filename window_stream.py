@@ -1794,7 +1794,7 @@ def main() -> None:
     parser.add_argument(
         "--arrow-delay",
         type=float,
-        default=0.1,
+        default=0.05,
         help="Delay (seconds) after an arrow key press before capture, to let the board update.",
     )
     parser.add_argument(
