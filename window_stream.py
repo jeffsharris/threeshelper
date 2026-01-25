@@ -1743,6 +1743,10 @@ def stream_labels_on_keys(
             if prev_board_sig is not None:
                 diff = board_signature_diff(prev_board_sig, curr_sig)
                 if diff <= board_delta_threshold:
+                    ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
+                    print(
+                        f"[{ts}] skip: board delta {diff:.3f} <= threshold {board_delta_threshold:.3f}"
+                    )
                     return
             prev_board_sig = curr_sig
             board = classify_board(arr)
