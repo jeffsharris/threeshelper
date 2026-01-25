@@ -51,7 +51,9 @@ KEYCODES = {
 }
 
 
-LARGE_DELAY_SMALLS = 20  # no large tile before this many smalls have been seen (first batch of 20 starts at first preview tile)
+LARGE_DELAY_SMALLS = 20  # no large tile before this many small placements have been seen.
+LARGE_PREVIEW_OFFSET = 1  # previews are one step ahead of placements.
+LARGE_DELAY_PREVIEWS = LARGE_DELAY_SMALLS + LARGE_PREVIEW_OFFSET
 LARGE_SPAN_SMALLS = 20   # one large per span of 20 small tiles (in 21 positions)
 
 
@@ -89,10 +91,10 @@ class TileCycle:
         if count_as_small:
             self.small_pos += 1
             self.small_seen_total += 1
-            # Large scheduling begins after the first LARGE_DELAY_SMALLS smalls.
-            if self.small_seen_total == LARGE_DELAY_SMALLS:
+            # Large scheduling begins after the first LARGE_DELAY_PREVIEWS previews.
+            if self.small_seen_total == LARGE_DELAY_PREVIEWS:
                 self._start_new_large_span()
-            elif self.small_seen_total > LARGE_DELAY_SMALLS:
+            elif self.small_seen_total > LARGE_DELAY_PREVIEWS:
                 self.span_small_pos += 1
 
         if label in self.small_counts and self.small_counts[label] > 0:
@@ -105,7 +107,7 @@ class TileCycle:
             self._reset_small()
 
         # Advance large span once the current 20 smalls are done and the large has appeared.
-        if self.small_seen_total >= LARGE_DELAY_SMALLS:
+        if self.small_seen_total >= LARGE_DELAY_PREVIEWS:
             self.span_small_pos = min(self.span_small_pos, LARGE_SPAN_SMALLS)
             if not self.large_pending and self.span_small_pos >= LARGE_SPAN_SMALLS:
                 self._start_new_large_span()
@@ -128,8 +130,8 @@ class TileCycle:
 
     def large_probability(self) -> float:
         """Probability that the next tile is large."""
-        # No large tiles in the first LARGE_DELAY_SMALLS smalls.
-        if self.small_seen_total < LARGE_DELAY_SMALLS:
+        # No large tiles in the first LARGE_DELAY_PREVIEWS previews.
+        if self.small_seen_total < LARGE_DELAY_PREVIEWS:
             return 0.0
         if not self.large_pending:
             return 0.0
