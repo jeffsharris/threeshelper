@@ -9,6 +9,8 @@ def _read_json(path: Path) -> Dict:
 
 
 def render_html(entries: List[Dict[str, object]], title: str) -> str:
+    has_board = any((entry.get("files", {}) or {}).get("board") for entry in entries)
+    has_preview = any((entry.get("files", {}) or {}).get("preview") for entry in entries)
     rows = []
     for entry in entries:
         frame = entry.get("frame")
@@ -16,19 +18,34 @@ def render_html(entries: List[Dict[str, object]], title: str) -> str:
         diff_prev = entry.get("diff_prev")
         diff_first = entry.get("diff_first")
         files = entry.get("files", {})
-        row = (
-            "<tr>"
-            f"<td>{frame}</td>"
-            f"<td>{elapsed}</td>"
-            f"<td>{diff_prev}</td>"
-            f"<td>{diff_first}</td>"
-            f"<td><img src=\"{files.get('board','')}\" alt=\"board {frame}\" /></td>"
-            f"<td><img src=\"{files.get('preview','')}\" alt=\"preview {frame}\" /></td>"
-            f"<td><img src=\"{files.get('full','')}\" alt=\"full {frame}\" /></td>"
-            "</tr>"
-        )
+        cells = [
+            f"<td>{frame}</td>",
+            f"<td>{elapsed}</td>",
+            f"<td>{diff_prev}</td>",
+            f"<td>{diff_first}</td>",
+        ]
+        if has_board:
+            cells.append(f"<td><img src=\"{files.get('board','')}\" alt=\"board {frame}\" /></td>")
+        if has_preview:
+            cells.append(
+                f"<td><img src=\"{files.get('preview','')}\" alt=\"preview {frame}\" /></td>"
+            )
+        cells.append(f"<td><img src=\"{files.get('full','')}\" alt=\"full {frame}\" /></td>")
+        row = "<tr>" + "".join(cells) + "</tr>"
         rows.append(row)
     rows_html = "\n    ".join(rows)
+    header_cells = [
+        "<th>Frame</th>",
+        "<th>Elapsed (s)</th>",
+        "<th>Diff Prev</th>",
+        "<th>Diff First</th>",
+    ]
+    if has_board:
+        header_cells.append("<th>Board</th>")
+    if has_preview:
+        header_cells.append("<th>Preview</th>")
+    header_cells.append("<th>Full</th>")
+    header_html = "".join(header_cells)
     return f"""<!doctype html>
 <html>
 <head>
@@ -42,9 +59,7 @@ def render_html(entries: List[Dict[str, object]], title: str) -> str:
     th {{ position: sticky; top: 0; background: #181b24; }}
     tr:nth-child(even) {{ background: #141821; }}
     img {{ display: block; border: 1px solid #2b2f3b; border-radius: 4px; background: #0f1118; }}
-    td img {{ max-width: 220px; height: auto; }}
-    td:nth-child(5) img {{ width: 140px; }}
-    td:nth-child(6) img {{ width: 140px; }}
+    td img {{ max-width: 240px; height: auto; }}
   </style>
 </head>
 <body>
@@ -52,13 +67,7 @@ def render_html(entries: List[Dict[str, object]], title: str) -> str:
   <table>
     <thead>
       <tr>
-        <th>Frame</th>
-        <th>Elapsed (s)</th>
-        <th>Diff Prev</th>
-        <th>Diff First</th>
-        <th>Board</th>
-        <th>Preview</th>
-        <th>Full</th>
+        {header_html}
       </tr>
     </thead>
     <tbody>

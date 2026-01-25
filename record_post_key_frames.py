@@ -1,5 +1,6 @@
 import argparse
 import json
+import subprocess
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -30,15 +31,11 @@ def _pick_window(window_id: Optional[int], prefix: str) -> Tuple[int, str, str]:
 def _capture_frame(window_id: int) -> Tuple[np.ndarray, Dict[str, object]]:
     img = ws.capture_window(window_id)
     arr = np.array(img)
-    board_roi, board_box = ws.find_board_roi(arr)
-    preview_roi, preview_box = ws.find_preview_roi(arr)
     sig, sig_box = ws.board_signature(arr)
     meta = {
-        "board_box": list(board_box),
-        "preview_box": list(preview_box),
         "signature_box": list(sig_box),
     }
-    return arr, {"board_roi": board_roi, "preview_roi": preview_roi, "sig": sig, "meta": meta}
+    return arr, {"sig": sig, "meta": meta}
 
 
 def _record_event(
@@ -46,19 +43,23 @@ def _record_event(
     event_dir: Path,
     key: str,
     ts_event: float,
-    frames: int,
     interval: float,
+    settle_threshold: float,
+    settle_frames: int,
+    min_frames: int,
+    max_frames: int,
+    max_duration: float,
 ) -> List[Dict[str, object]]:
     event_dir.mkdir(parents=True, exist_ok=False)
     start = time.time()
     prev_sig = None
     first_sig = None
+    stable = 0
     entries: List[Dict[str, object]] = []
-    for idx in range(frames):
+    idx = 0
+    while True:
         frame_start = time.time()
         arr, data = _capture_frame(window_id)
-        board_roi = data["board_roi"]
-        preview_roi = data["preview_roi"]
         sig = data["sig"]
         meta = data["meta"]
 
@@ -66,14 +67,14 @@ def _record_event(
             first_sig = sig
         diff_prev = None if prev_sig is None else ws.board_signature_diff(prev_sig, sig)
         diff_first = None if first_sig is None else ws.board_signature_diff(first_sig, sig)
+        if diff_prev is not None and diff_prev <= settle_threshold:
+            stable += 1
+        else:
+            stable = 0
         prev_sig = sig
 
         full_name = f"full_{idx:03d}.png"
-        board_name = f"board_{idx:03d}.png"
-        preview_name = f"preview_{idx:03d}.png"
         Image.fromarray(arr).save(event_dir / full_name)
-        Image.fromarray(board_roi).save(event_dir / board_name)
-        Image.fromarray(preview_roi).save(event_dir / preview_name)
 
         entry = {
             "frame": idx,
@@ -84,22 +85,31 @@ def _record_event(
             "diff_first": diff_first,
             "files": {
                 "full": full_name,
-                "board": board_name,
-                "preview": preview_name,
             },
         }
         entry.update(meta)
         entries.append(entry)
 
-        next_t = start + (idx + 1) * interval
-        sleep_for = next_t - time.time()
-        if sleep_for > 0:
-            time.sleep(sleep_for)
+        idx += 1
+        elapsed = frame_start - start
+        if idx >= min_frames and stable >= settle_frames:
+            break
+        if max_frames > 0 and idx >= max_frames:
+            break
+        if max_duration > 0 and elapsed >= max_duration:
+            break
+        if interval > 0:
+            time.sleep(interval)
     summary = {
         "key": key,
         "ts_event": _iso_ts(ts_event),
-        "frames": frames,
+        "frames": len(entries),
         "interval_s": interval,
+        "settle_threshold": settle_threshold,
+        "settle_frames": settle_frames,
+        "min_frames": min_frames,
+        "max_frames": max_frames,
+        "max_duration_s": max_duration,
         "entries": entries,
     }
     (event_dir / "frames.json").write_text(
@@ -131,20 +141,49 @@ def main() -> None:
     parser.add_argument(
         "--duration",
         type=float,
-        default=1.0,
-        help="Seconds to capture after the key press (default: 1.0).",
+        default=0.0,
+        help="Max seconds to capture after the key press; 0 means no limit (default: 0).",
     )
     parser.add_argument(
         "--interval",
         type=float,
-        default=0.05,
-        help="Seconds between frames (default: 0.05).",
+        default=0.0,
+        help="Minimum seconds between frames (default: 0 for fastest possible).",
     )
     parser.add_argument(
         "--events",
         type=int,
         default=1,
         help="Number of arrow key events to record before exiting (default: 1).",
+    )
+    parser.add_argument(
+        "--settle-threshold",
+        type=float,
+        default=0.15,
+        help="Board signature diff threshold to consider settled (default: 0.15).",
+    )
+    parser.add_argument(
+        "--settle-frames",
+        type=int,
+        default=2,
+        help="Consecutive stable frames required to stop recording (default: 2).",
+    )
+    parser.add_argument(
+        "--min-frames",
+        type=int,
+        default=6,
+        help="Minimum frames to capture before allowing early stop (default: 6).",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=120,
+        help="Maximum frames to capture per event (default: 120).",
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Open the HTML viewer after capture.",
     )
     args = parser.parse_args()
 
@@ -159,8 +198,12 @@ def main() -> None:
             {
                 "created": _iso_ts(),
                 "window": {"id": window_id, "app": app_name, "title": win_name},
-                "duration_s": args.duration,
+                "max_duration_s": args.duration,
                 "interval_s": args.interval,
+                "settle_threshold": args.settle_threshold,
+                "settle_frames": args.settle_frames,
+                "min_frames": args.min_frames,
+                "max_frames": args.max_frames,
                 "events": args.events,
             },
             indent=2,
@@ -170,23 +213,33 @@ def main() -> None:
     events = ws.start_key_listener()
     print("Press an arrow key to record frames.")
     event_idx = 0
-    frames = max(1, int(args.duration / args.interval) + 1)
     while event_idx < args.events:
         ts_event, key = events.get()
         if key not in ARROW_KEYS:
             continue
         event_idx += 1
         event_dir = session_dir / f"event_{event_idx:03d}_{key}"
-        print(f"[{_iso_ts(ts_event)}] recording {frames} frames after {key}...")
+        print(f"[{_iso_ts(ts_event)}] recording frames after {key}...")
         _record_event(
             window_id,
             event_dir,
             key,
             ts_event,
-            frames,
             args.interval,
+            args.settle_threshold,
+            args.settle_frames,
+            args.min_frames,
+            args.max_frames,
+            args.duration,
         )
         print(f"Wrote {event_dir}/frames.json")
+        viewer = event_dir / "frames_viewer.html"
+        subprocess.run(
+            ["python3", "build_frames_viewer.py", str(event_dir / "frames.json")],
+            check=False,
+        )
+        if args.open and viewer.exists():
+            subprocess.run(["open", str(viewer)], check=False)
 
 
 if __name__ == "__main__":
