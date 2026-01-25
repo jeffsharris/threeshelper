@@ -51,7 +51,7 @@ KEYCODES = {
 }
 
 
-LARGE_DELAY_SMALLS = 21  # no large tile before this many smalls have been seen (first batch of 21 starts at first preview tile)
+LARGE_DELAY_SMALLS = 20  # no large tile before this many smalls have been seen (first batch of 20 starts at first preview tile)
 LARGE_SPAN_SMALLS = 20   # one large per span of 20 small tiles (in 21 positions)
 
 
