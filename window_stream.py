@@ -1236,6 +1236,15 @@ def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
     return counts
 
 
+def _board_has_unknowns(board: List[List[str]]) -> bool:
+    """Return True if any board cell is unknown."""
+    for row in board:
+        for cell in row:
+            if cell == TOKEN_OTHER:
+                return True
+    return False
+
+
 def _initial_state_error(board: List[List[str]], preview_label: str) -> Optional[str]:
     """Return an error message if the initial board/preview state is invalid."""
     small_tokens = {SMALL_COLOR_MAP["red"], SMALL_COLOR_MAP["blue"], CELL_GRAY_TOKEN}
@@ -1642,7 +1651,6 @@ def stream_labels_on_keys(
     arrow_delay: float,
     dataset_dir: Optional[str] = None,
     window_info: Optional[Dict[str, object]] = None,
-    board_delta_threshold: float = 0.3,
     settle_threshold: float = 0.15,
     settle_frames: int = 2,
     settle_poll: float = 0.05,
@@ -1658,7 +1666,8 @@ def stream_labels_on_keys(
     history: list[Tuple[Dict[str, int], int, int, int]] = []
     recorder = None
     initial_check = True
-    prev_board_sig: Optional[np.ndarray] = None
+    prev_board: Optional[List[List[str]]] = None
+    prev_preview_label: Optional[str] = None
     if dataset_dir:
         recorder = DatasetRecorder(Path(dataset_dir), window_info=window_info)
         print(f"Recording dataset to {recorder.session_dir}")
@@ -1667,7 +1676,8 @@ def stream_labels_on_keys(
     def initialize_cycle(ts_event: float) -> None:
         nonlocal tile_cycle
         nonlocal initial_check
-        nonlocal prev_board_sig
+        nonlocal prev_board
+        nonlocal prev_preview_label
         try:
             arr = np.array(capture_window(window_id))
             board = classify_board(arr)
@@ -1675,16 +1685,14 @@ def stream_labels_on_keys(
         except Exception as exc:  # noqa: BLE001
             print_error(str(exc))
             return
-        try:
-            prev_board_sig, _ = board_signature(arr)
-        except Exception:
-            prev_board_sig = None
         if initial_check:
             err = _initial_state_error(board, preview_label)
             if err:
                 print_error(err)
                 raise SystemExit(1)
             initial_check = False
+        prev_board = board
+        prev_preview_label = preview_label
         tile_cycle = TileCycle()
         seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
         history.clear()
@@ -1734,26 +1742,27 @@ def stream_labels_on_keys(
 
     def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
         nonlocal tile_cycle
-        nonlocal prev_board_sig
+        nonlocal prev_board
+        nonlocal prev_preview_label
         arr = capture_after_settle(apply_delay)
         if arr is None:
             return
         try:
-            curr_sig, _ = board_signature(arr)
-            if prev_board_sig is not None:
-                diff = board_signature_diff(prev_board_sig, curr_sig)
-                if diff <= board_delta_threshold:
-                    ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
-                    print(
-                        f"[{ts}] skip: board delta {diff:.3f} <= threshold {board_delta_threshold:.3f}"
-                    )
-                    return
-            prev_board_sig = curr_sig
             board = classify_board(arr)
             label, _debug = classify_array(arr)
         except Exception as exc:  # noqa: BLE001
             print_error(str(exc))
             return
+        if prev_board is not None and prev_preview_label is not None:
+            unknown_now = _board_has_unknowns(board) or label == "unknown"
+            unknown_prev = _board_has_unknowns(prev_board) or prev_preview_label == "unknown"
+            if not unknown_now and not unknown_prev:
+                if board == prev_board and label == prev_preview_label:
+                    ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
+                    print(f"[{ts}] skip: board+preview unchanged")
+                    return
+        prev_board = board
+        prev_preview_label = label
         ok, reason = preview_possible(tile_cycle, label)
         if not ok:
             print_error(f"preview '{label}' not possible: {reason}")
@@ -1941,7 +1950,6 @@ def main() -> None:
             args.arrow_delay,
             dataset_dir=args.record_dataset,
             window_info={"id": window_id, "app": app_name, "title": win_name},
-            board_delta_threshold=args.board_delta_threshold,
             settle_threshold=args.settle_threshold,
             settle_frames=args.settle_frames,
             settle_poll=args.settle_poll,
