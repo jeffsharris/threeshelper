@@ -1527,7 +1527,6 @@ def stream_labels(
     board_delta_threshold: float,
 ) -> None:
     prev_label: Optional[str] = None
-    prev_preview_label: Optional[str] = None
     prev_board_sig: Optional[np.ndarray] = None
     tile_cycle = TileCycle()
     while True:
@@ -1549,14 +1548,12 @@ def stream_labels(
 
         should_print = print_all or board_changed or label != prev_label
         if should_print:
-            if prev_preview_label is not None:
-                tile_cycle.update(prev_preview_label)
+            tile_cycle.update(label)
             state_str = format_state(tile_cycle)
             ts = time.strftime("%H:%M:%S")
             delta_str = f" boardΔ={board_delta:.3f}" if board_delta is not None else ""
             print(f"[{ts}]{delta_str} {state_str}")
             prev_label = label
-            prev_preview_label = label
         prev_board_sig = curr_board_sig
         time.sleep(poll_seconds)
 
@@ -1660,7 +1657,6 @@ def stream_labels_on_keys(
     history: list[Tuple[Dict[str, int], int, int, int]] = []
     recorder = None
     initial_check = True
-    prev_preview_label: Optional[str] = None
     if dataset_dir:
         recorder = DatasetRecorder(Path(dataset_dir), window_info=window_info)
         print(f"Recording dataset to {recorder.session_dir}")
@@ -1669,7 +1665,6 @@ def stream_labels_on_keys(
     def initialize_cycle(ts_event: float) -> None:
         nonlocal tile_cycle
         nonlocal initial_check
-        nonlocal prev_preview_label
         try:
             arr = np.array(capture_window(window_id))
             board = classify_board(arr)
@@ -1689,8 +1684,8 @@ def stream_labels_on_keys(
         ok, reason = preview_possible(tile_cycle, preview_label)
         if not ok:
             print_error(f"preview '{preview_label}' not possible at init: {reason}")
-        # Do not consume the preview until it is actually placed on the next move.
-        prev_preview_label = preview_label
+        # Consume the preview so the displayed pool reflects tiles remaining after it.
+        tile_cycle.update(preview_label)
         print(render_move_table(board, preview_label, tile_cycle))
         print()
         # No condensed debug line; table is the only state output (errors still printed).
@@ -1732,7 +1727,6 @@ def stream_labels_on_keys(
 
     def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
         nonlocal tile_cycle
-        nonlocal prev_preview_label
         arr = capture_after_settle(apply_delay)
         if arr is None:
             return
@@ -1742,13 +1736,11 @@ def stream_labels_on_keys(
         except Exception as exc:  # noqa: BLE001
             print_error(str(exc))
             return
-        if prev_preview_label is not None:
-            history.append(tile_cycle.snapshot())
-            tile_cycle.update(prev_preview_label)
         ok, reason = preview_possible(tile_cycle, label)
         if not ok:
             print_error(f"preview '{label}' not possible: {reason}")
-        prev_preview_label = label
+        history.append(tile_cycle.snapshot())
+        tile_cycle.update(label)
         ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
         capture_id = None
         if recorder:
