@@ -102,7 +102,9 @@ def _record_event(
         "interval_s": interval,
         "entries": entries,
     }
-    (event_dir / "frames.json").write_text(json.dumps(summary, indent=2))
+    (event_dir / "frames.json").write_text(
+        json.dumps(summary, indent=2, default=ws._json_safe)
+    )
     return entries
 
 
