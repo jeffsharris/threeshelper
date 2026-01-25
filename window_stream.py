@@ -1642,6 +1642,7 @@ def stream_labels_on_keys(
     arrow_delay: float,
     dataset_dir: Optional[str] = None,
     window_info: Optional[Dict[str, object]] = None,
+    board_delta_threshold: float = 0.3,
     settle_threshold: float = 0.15,
     settle_frames: int = 2,
     settle_poll: float = 0.05,
@@ -1657,6 +1658,7 @@ def stream_labels_on_keys(
     history: list[Tuple[Dict[str, int], int, int, int]] = []
     recorder = None
     initial_check = True
+    prev_board_sig: Optional[np.ndarray] = None
     if dataset_dir:
         recorder = DatasetRecorder(Path(dataset_dir), window_info=window_info)
         print(f"Recording dataset to {recorder.session_dir}")
@@ -1665,6 +1667,7 @@ def stream_labels_on_keys(
     def initialize_cycle(ts_event: float) -> None:
         nonlocal tile_cycle
         nonlocal initial_check
+        nonlocal prev_board_sig
         try:
             arr = np.array(capture_window(window_id))
             board = classify_board(arr)
@@ -1672,6 +1675,10 @@ def stream_labels_on_keys(
         except Exception as exc:  # noqa: BLE001
             print_error(str(exc))
             return
+        try:
+            prev_board_sig, _ = board_signature(arr)
+        except Exception:
+            prev_board_sig = None
         if initial_check:
             err = _initial_state_error(board, preview_label)
             if err:
@@ -1727,10 +1734,17 @@ def stream_labels_on_keys(
 
     def capture_and_update(ts_event: float, apply_delay: bool = False) -> None:
         nonlocal tile_cycle
+        nonlocal prev_board_sig
         arr = capture_after_settle(apply_delay)
         if arr is None:
             return
         try:
+            curr_sig, _ = board_signature(arr)
+            if prev_board_sig is not None:
+                diff = board_signature_diff(prev_board_sig, curr_sig)
+                if diff <= board_delta_threshold:
+                    return
+            prev_board_sig = curr_sig
             board = classify_board(arr)
             label, _debug = classify_array(arr)
         except Exception as exc:  # noqa: BLE001
@@ -1923,6 +1937,7 @@ def main() -> None:
             args.arrow_delay,
             dataset_dir=args.record_dataset,
             window_info={"id": window_id, "app": app_name, "title": win_name},
+            board_delta_threshold=args.board_delta_threshold,
             settle_threshold=args.settle_threshold,
             settle_frames=args.settle_frames,
             settle_poll=args.settle_poll,
