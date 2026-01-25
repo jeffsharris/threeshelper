@@ -1236,6 +1236,32 @@ def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
     return counts
 
 
+def _initial_state_error(board: List[List[str]], preview_label: str) -> Optional[str]:
+    """Return an error message if the initial board/preview state is invalid."""
+    small_tokens = {SMALL_COLOR_MAP["red"], SMALL_COLOR_MAP["blue"], CELL_GRAY_TOKEN}
+    small_count = 0
+    large_count = 0
+    for row in board:
+        for cell in row:
+            if cell == TOKEN_EMPTY:
+                continue
+            if cell in small_tokens:
+                small_count += 1
+            else:
+                large_count += 1
+    if preview_label not in ("red", "blue", "gray"):
+        return (
+            "initial state invalid: preview must be a small tile "
+            f"(red/blue/gray), got {preview_label!r}"
+        )
+    if small_count != 8 or large_count != 1:
+        return (
+            "initial state invalid: expected 8 small tiles and 1 large tile on board, "
+            f"got small={small_count}, large={large_count}"
+        )
+    return None
+
+
 def preview_possible(tile_cycle: "TileCycle", preview_label: str) -> Tuple[bool, str]:
     """
     Return (is_possible, reason) for the current preview tile under the tile_cycle state.
@@ -1630,6 +1656,7 @@ def stream_labels_on_keys(
     tile_cycle = TileCycle()
     history: list[Tuple[Dict[str, int], int, int, int]] = []
     recorder = None
+    initial_check = True
     if dataset_dir:
         recorder = DatasetRecorder(Path(dataset_dir), window_info=window_info)
         print(f"Recording dataset to {recorder.session_dir}")
@@ -1637,6 +1664,7 @@ def stream_labels_on_keys(
 
     def initialize_cycle(ts_event: float) -> None:
         nonlocal tile_cycle
+        nonlocal initial_check
         try:
             arr = np.array(capture_window(window_id))
             board = classify_board(arr)
@@ -1644,6 +1672,12 @@ def stream_labels_on_keys(
         except Exception as exc:  # noqa: BLE001
             print_error(str(exc))
             return
+        if initial_check:
+            err = _initial_state_error(board, preview_label)
+            if err:
+                print_error(err)
+                raise SystemExit(1)
+            initial_check = False
         tile_cycle = TileCycle()
         seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
         history.clear()
