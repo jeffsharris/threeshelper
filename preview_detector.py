@@ -100,7 +100,7 @@ def classify_roi(roi: np.ndarray) -> Tuple[str, Dict]:
 
         is_large = (
             len(coords) > 500
-            and y_std_norm < 0.08
+            and y_std_norm < 0.11
             and x_std_norm > 0.12
         )
         if is_large:
