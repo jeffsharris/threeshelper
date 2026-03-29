@@ -57,6 +57,31 @@ python3 window_stream.py --record-dataset datasets
    - Use arrow keys to play; each arrow capture becomes a dataset entry you can label.
    - Capture waits for the board to settle (defaults: 2 stable frames, threshold 0.15, timeout 1.0s). Tune with `--settle-*` flags if needed.
 
+Direct iPhone Mirroring control
+-------------------------------
+`mirroring_control.py` drives the `iPhone Mirroring` window directly with native macOS mouse events.
+
+Print the current parsed board/preview:
+```bash
+python3 mirroring_control.py
+```
+
+Send one swipe:
+```bash
+python3 mirroring_control.py --swipe left
+```
+
+Self-play from the current board:
+```bash
+python3 mirroring_control.py --autoplay --max-moves 200
+```
+
+Useful notes:
+- Works against the live `iPhone Mirroring` window; the game does not need to exist as a local app target.
+- If the visible board does not look like a fresh game, tile-cycle probability tracking is disabled automatically and the script still plays.
+- `--tap-rel X Y` sends a single tap at relative window coordinates, which is intended for future game-over/new-game flows.
+- `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.
+
 Gray tile labeling (build 3+ dataset):
 ```bash
 python3 extract_gray_tiles.py --session session_YYYYMMDD_HHMMSS
