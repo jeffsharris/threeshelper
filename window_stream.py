@@ -3,6 +3,7 @@ import colorsys
 import json
 import os
 import queue
+from collections import deque
 import subprocess
 import tempfile
 import time
@@ -749,41 +750,182 @@ def _refine_grid_params(
     ys_ref = [y + best_dy for y in ys_base]
     meta = {"dx": float(best_dx), "dy": float(best_dy), "score": float(best_score)}
     return xs_ref, ys_ref, inset_x, inset_y, meta
+
+
+def _estimate_board_background_color(roi: np.ndarray) -> np.ndarray:
+    h, w, _ = roi.shape
+    sample = max(8, min(h, w) // 12)
+    corners = [
+        roi[:sample, :sample],
+        roi[:sample, w - sample :],
+        roi[h - sample :, :sample],
+        roi[h - sample :, w - sample :],
+    ]
+    return np.concatenate([patch.reshape(-1, 3) for patch in corners], axis=0).mean(axis=0)
+
+
+def _component_boxes(mask: np.ndarray) -> List[Tuple[int, int, int, int, int, bool]]:
+    h, w = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    boxes: List[Tuple[int, int, int, int, int, bool]] = []
+    for y in range(h):
+        for x in range(w):
+            if not mask[y, x] or visited[y, x]:
+                continue
+            q = deque([(y, x)])
+            visited[y, x] = True
+            min_x = max_x = x
+            min_y = max_y = y
+            area = 0
+            touches_edge = False
+            while q:
+                cy, cx = q.popleft()
+                area += 1
+                if cy in (0, h - 1) or cx in (0, w - 1):
+                    touches_edge = True
+                min_x = min(min_x, cx)
+                max_x = max(max_x, cx)
+                min_y = min(min_y, cy)
+                max_y = max(max_y, cy)
+                for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                    if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not visited[ny, nx]:
+                        visited[ny, nx] = True
+                        q.append((ny, nx))
+            boxes.append((min_x, min_y, max_x, max_y, area, touches_edge))
+    return boxes
+
+
+def _detect_board_cell_outer_boxes(
+    roi: np.ndarray,
+) -> Optional[Tuple[List[Tuple[int, int, Tuple[int, int, int, int]]], Dict[str, object]]]:
+    h, w, _ = roi.shape
+    bg = _estimate_board_background_color(roi)
+    dist = np.linalg.norm(roi.astype(np.float32) - bg.astype(np.float32), axis=2)
+    min_w = max(24, int(w * 0.07))
+    max_w = max(min_w + 1, int(w * 0.32))
+    min_h = max(48, int(h * 0.12))
+    max_h = max(min_h + 1, int(h * 0.30))
+    min_area = int(min_w * min_h * 0.7)
+
+    chosen_boxes: Optional[List[Tuple[int, int, int, int]]] = None
+    chosen_threshold: Optional[float] = None
+    threshold_candidates = (18.0, 16.0, 20.0, 14.0, 22.0, 24.0)
+    best_distance = float("inf")
+
+    for threshold in threshold_candidates:
+        mask = dist > threshold
+        boxes: List[Tuple[int, int, int, int]] = []
+        for x0, y0, x1, y1, area, touches_edge in _component_boxes(mask):
+            if touches_edge:
+                continue
+            bw = x1 - x0 + 1
+            bh = y1 - y0 + 1
+            if bw < min_w or bw > max_w or bh < min_h or bh > max_h or area < min_area:
+                continue
+            boxes.append((x0, y0, x1, y1))
+        distance = abs(len(boxes) - 16)
+        if len(boxes) == 16:
+            chosen_boxes = boxes
+            chosen_threshold = threshold
+            break
+        if boxes and distance < best_distance:
+            chosen_boxes = boxes
+            chosen_threshold = threshold
+            best_distance = distance
+
+    if chosen_boxes is None or len(chosen_boxes) != 16:
+        return None
+
+    x_centers = sorted((x0 + x1) / 2.0 for x0, _y0, x1, _y1 in chosen_boxes)
+    y_centers = sorted((y0 + y1) / 2.0 for _x0, y0, _x1, y1 in chosen_boxes)
+    col_centers = [sum(x_centers[i : i + 4]) / 4.0 for i in range(0, 16, 4)]
+    row_centers = [sum(y_centers[i : i + 4]) / 4.0 for i in range(0, 16, 4)]
+
+    assigned: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+    seen = set()
+    for x0, y0, x1, y1 in chosen_boxes:
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        col = min(range(4), key=lambda idx: abs(cx - col_centers[idx]))
+        row = min(range(4), key=lambda idx: abs(cy - row_centers[idx]))
+        if (row, col) in seen:
+            return None
+        seen.add((row, col))
+        assigned.append((row, col, (x0, y0, x1, y1)))
+
+    assigned.sort(key=lambda item: (item[0], item[1]))
+    meta = {
+        "method": "detected_components",
+        "threshold": float(chosen_threshold or 0.0),
+        "component_count": 16,
+    }
+    return assigned, meta
+
+
+def _apply_inset(box: Tuple[int, int, int, int], inset_ratio: float) -> Tuple[int, int, int, int]:
+    x0, y0, x1, y1 = box
+    inset_x = int(round((x1 - x0) * inset_ratio))
+    inset_y = int(round((y1 - y0) * inset_ratio))
+    x0i = x0 + inset_x
+    x1i = x1 - inset_x
+    y0i = y0 + inset_y
+    y1i = y1 - inset_y
+    if x1i <= x0i:
+        x0i, x1i = x0, x1
+    if y1i <= y0i:
+        y0i, y1i = y0, y1
+    return x0i, y0i, x1i, y1i
+
+
+def _fallback_board_cell_outer_boxes(
+    roi: np.ndarray,
+) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int]]], Dict[str, float]]:
+    xs, ys, _inset_x, _inset_y, grid_meta = _refine_grid_params(roi, inset_ratio=0.0)
+    boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+    for r in range(4):
+        for c in range(4):
+            boxes.append((r, c, (xs[c], ys[r], xs[c + 1], ys[r + 1])))
+    meta = {"method": "fallback_grid", **grid_meta}
+    return boxes, meta
+
+
+def _board_cell_boxes(
+    roi: np.ndarray,
+    inset_ratio: float = 0.0,
+) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int], Tuple[int, int, int, int]]], Dict[str, object]]:
+    detected = _detect_board_cell_outer_boxes(roi)
+    if detected is None:
+        outer_boxes, meta = _fallback_board_cell_outer_boxes(roi)
+    else:
+        outer_boxes, meta = detected
+    boxes = []
+    for r, c, outer_box in outer_boxes:
+        boxes.append((r, c, outer_box, _apply_inset(outer_box, inset_ratio)))
+    return boxes, meta
+
+
 def classify_board(arr: np.ndarray) -> List[List[str]]:
     """
     Return a 4x4 grid of classified cells using fixed 1/4 splits inside the board ROI.
     A small inset is removed inside each cell to avoid tile borders.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(
-        roi, inset_ratio=CLASSIFY_INSET_RATIO
-    )
-    _xs_g, _ys_g, inset_x_g, inset_y_g, _grid_meta_g = _refine_grid_params(
-        roi, inset_ratio=GRAY_INSET_RATIO
-    )
+    color_boxes, _grid_meta = _board_cell_boxes(roi, inset_ratio=CLASSIFY_INSET_RATIO)
+    gray_boxes, _grid_meta_g = _board_cell_boxes(roi, inset_ratio=GRAY_INSET_RATIO)
+    gray_lookup = {(r, c): inner_box for r, c, _outer_box, inner_box in gray_boxes}
 
     # Precompute cell brightness values to derive an adaptive blank threshold.
     cells: List[Tuple[int, int, np.ndarray]] = []
     gray_cells: Dict[Tuple[int, int], np.ndarray] = {}
     cell_means: List[float] = []
-    for r in range(4):
-        y0, y1 = ys[r], ys[r + 1]
-        y0i = int(y0 + inset_y)
-        y1i = int(y1 - inset_y)
-        for c in range(4):
-            x0, x1 = xs[c], xs[c + 1]
-            x0i = int(x0 + inset_x)
-            x1i = int(x1 - inset_x)
-            cell = roi[y0i:y1i, x0i:x1i]
-            stats = _cell_stats(cell)
-            cell_means.append(float(stats["trim_mean"]))
-            cells.append((r, c, cell))
-            # Wider crop for gray digits.
-            y0g = int(ys[r] + inset_y_g)
-            y1g = int(ys[r + 1] - inset_y_g)
-            x0g = int(xs[c] + inset_x_g)
-            x1g = int(xs[c + 1] - inset_x_g)
-            gray_cells[(r, c)] = roi[y0g:y1g, x0g:x1g]
+    for r, c, _outer_box, inner_box in color_boxes:
+        x0i, y0i, x1i, y1i = inner_box
+        cell = roi[y0i:y1i, x0i:x1i]
+        stats = _cell_stats(cell)
+        cell_means.append(float(stats["trim_mean"]))
+        cells.append((r, c, cell))
+        x0g, y0g, x1g, y1g = gray_lookup[(r, c)]
+        gray_cells[(r, c)] = roi[y0g:y1g, x0g:x1g]
     blank_threshold = _dynamic_blank_threshold(cell_means, BLANK_MEAN_THRESHOLD)
 
     grid: List[List[str]] = [["" for _ in range(4)] for _ in range(4)]
@@ -801,19 +943,12 @@ def segment_board_cells(arr: np.ndarray, inset_ratio: float = 0.0) -> List[Tuple
     Return list of (row, col, cell_array) using fixed 1/4 splits inside the board ROI.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(roi, inset_ratio=inset_ratio)
+    boxes, _grid_meta = _board_cell_boxes(roi, inset_ratio=inset_ratio)
 
     cells: List[Tuple[int, int, np.ndarray]] = []
-    for r in range(4):
-        y0, y1 = ys[r], ys[r + 1]
-        y0i = int(y0 + inset_y)
-        y1i = int(y1 - inset_y)
-        for c in range(4):
-            x0, x1 = xs[c], xs[c + 1]
-            x0i = int(x0 + inset_x)
-            x1i = int(x1 - inset_x)
-            cell = roi[y0i:y1i, x0i:x1i]
-            cells.append((r, c, cell))
+    for r, c, _outer_box, inner_box in boxes:
+        x0i, y0i, x1i, y1i = inner_box
+        cells.append((r, c, roi[y0i:y1i, x0i:x1i]))
     return cells
 
 
@@ -824,18 +959,12 @@ def segment_board_cells_with_boxes(
     Return list of (row, col, (x0,y0,x1,y1), cell_array) plus the board ROI.
     """
     roi, _box = find_board_roi(arr)
-    xs, ys, inset_x, inset_y, _grid_meta = _refine_grid_params(roi, inset_ratio=inset_ratio)
+    boxes_with_meta, _grid_meta = _board_cell_boxes(roi, inset_ratio=inset_ratio)
     cells: List[Tuple[int, int, Tuple[int, int, int, int], np.ndarray]] = []
-    for r in range(4):
-        y0, y1 = ys[r], ys[r + 1]
-        y0i = int(y0 + inset_y)
-        y1i = int(y1 - inset_y)
-        for c in range(4):
-            x0, x1 = xs[c], xs[c + 1]
-            x0i = int(x0 + inset_x)
-            x1i = int(x1 - inset_x)
-            cell = roi[y0i:y1i, x0i:x1i]
-            cells.append((r, c, (x0i, y0i, x1i, y1i), cell))
+    for r, c, _outer_box, inner_box in boxes_with_meta:
+        x0i, y0i, x1i, y1i = inner_box
+        cell = roi[y0i:y1i, x0i:x1i]
+        cells.append((r, c, (x0i, y0i, x1i, y1i), cell))
     return cells, roi
 
 
@@ -1116,37 +1245,27 @@ class DatasetRecorder:
         Image.fromarray(board_roi).save(board_path)
         Image.fromarray(preview_roi).save(preview_path)
 
-        xs, ys, inset_x, inset_y, grid_meta = _refine_grid_params(
+        color_boxes, grid_meta = _board_cell_boxes(
             board_roi, inset_ratio=CLASSIFY_INSET_RATIO
         )
-        xs_g, ys_g, inset_x_g, inset_y_g, _grid_meta_g = _refine_grid_params(
+        gray_boxes, _grid_meta_g = _board_cell_boxes(
             board_roi, inset_ratio=GRAY_INSET_RATIO
         )
-        boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+        gray_lookup = {(r, c): inner_box for r, c, _outer_box, inner_box in gray_boxes}
+        overlay_boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
         cell_stats: List[Dict[str, object]] = []
         cells: List[Tuple[int, int, np.ndarray]] = []
-        for r in range(4):
-            y0, y1 = ys[r], ys[r + 1]
-            y0i = int(y0 + inset_y)
-            y1i = int(y1 - inset_y)
-            for c in range(4):
-                x0, x1 = xs[c], xs[c + 1]
-                x0i = int(x0 + inset_x)
-                x1i = int(x1 - inset_x)
-                box = (x0i, y0i, x1i, y1i)
-                cell = board_roi[y0i:y1i, x0i:x1i]
-                stats = _cell_stats(cell)
-                stats.update({"row": r, "col": c, "box": list(box)})
-                cell_stats.append(stats)
-                boxes.append((r, c, box))
-                # Gray tiles get a wider crop for digit recognition.
-                y0g = int(ys_g[r] + inset_y_g)
-                y1g = int(ys_g[r + 1] - inset_y_g)
-                x0g = int(xs_g[c] + inset_x_g)
-                x1g = int(xs_g[c + 1] - inset_x_g)
-                cell_gray = board_roi[y0g:y1g, x0g:x1g]
-                cells.append((r, c, cell_gray))
-        overlay_img = _draw_board_overlay(board_roi, boxes)
+        for r, c, outer_box, inner_box in color_boxes:
+            x0i, y0i, x1i, y1i = inner_box
+            cell = board_roi[y0i:y1i, x0i:x1i]
+            stats = _cell_stats(cell)
+            stats.update({"row": r, "col": c, "box": list(inner_box), "outer_box": list(outer_box)})
+            cell_stats.append(stats)
+            overlay_boxes.append((r, c, outer_box))
+            x0g, y0g, x1g, y1g = gray_lookup[(r, c)]
+            cell_gray = board_roi[y0g:y1g, x0g:x1g]
+            cells.append((r, c, cell_gray))
+        overlay_img = _draw_board_overlay(board_roi, overlay_boxes)
         overlay_img.save(board_overlay_path)
         blank_threshold = _dynamic_blank_threshold(
             [float(stat["trim_mean"]) for stat in cell_stats], BLANK_MEAN_THRESHOLD

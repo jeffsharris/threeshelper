@@ -1,7 +1,7 @@
 import argparse
+import json
 import time
 import webbrowser
-from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -99,6 +99,7 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="panel">
       <h1>Live Tracker</h1>
       <div class="meta">Open <code>live_status.json</code> for raw state.</div>
+      <div class="meta"><a href="grid_editor.html" target="_blank" rel="noopener">Open Grid Editor</a></div>
       <div class="spacer"></div>
       <pre id="board">Waiting for status...</pre>
     </section>
@@ -155,6 +156,442 @@ DASHBOARD_HTML = """<!doctype html>
       boardNode.textContent = "Dashboard error: " + err;
     });
     setInterval(() => refresh().catch(() => {}), 500);
+  </script>
+</body>
+</html>
+"""
+
+
+GRID_EDITOR_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threes Grid Editor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #12131d;
+      --panel: #1f2131;
+      --border: #3b3e55;
+      --text: #f5f5f7;
+      --muted: #a8acba;
+      --vline: #ffcf5c;
+      --hline: #7ac7ff;
+      --saved: #8fd694;
+    }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #25283d 0%, var(--bg) 55%);
+      color: var(--text);
+      font-family: Menlo, Monaco, "Courier New", monospace;
+    }
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 20px;
+    }
+    .panel {
+      background: rgba(31, 33, 49, 0.94);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 22px 50px rgba(0, 0, 0, 0.28);
+    }
+    h1, h2 {
+      margin: 0 0 12px 0;
+      font-size: 18px;
+    }
+    p, .meta, pre, textarea, button {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .meta {
+      color: var(--muted);
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 12px 0;
+    }
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #2a2e46;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #343955;
+    }
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      background: #12131d;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+    .stage-wrap {
+      overflow: auto;
+    }
+    .stage {
+      position: relative;
+      display: inline-block;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: #0f1018;
+      min-width: 320px;
+      min-height: 400px;
+    }
+    .stage img {
+      display: block;
+      max-width: none;
+    }
+    .line {
+      position: absolute;
+      z-index: 2;
+      user-select: none;
+    }
+    .line.vertical {
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      margin-left: -2px;
+      background: var(--vline);
+      cursor: ew-resize;
+    }
+    .line.horizontal {
+      left: 0;
+      right: 0;
+      height: 4px;
+      margin-top: -2px;
+      background: var(--hline);
+      cursor: ns-resize;
+    }
+    .line span {
+      position: absolute;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.75);
+      color: var(--text);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .line.vertical span {
+      top: 8px;
+      left: 6px;
+    }
+    .line.horizontal span {
+      top: 6px;
+      left: 8px;
+    }
+    .saved {
+      color: var(--saved);
+    }
+    @media (max-width: 980px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>Grid Editor</h1>
+      <p class="meta">Drag the column and row boundaries until each tile box is exactly right, then save. The saved JSON is written into this observer session so the tracker can use it later.</p>
+      <div class="controls">
+        <button id="reload">Reload Latest</button>
+        <button id="save">Save Calibration</button>
+      </div>
+      <div id="status" class="meta">Loading latest capture...</div>
+      <div class="meta">Vertical lines: `c0_left`, `c0_right`, ... `c3_left`, `c3_right`</div>
+      <div class="meta">Horizontal lines: `r0_top`, `r0_bottom`, ... `r3_top`, `r3_bottom`</div>
+      <h2>Saved JSON</h2>
+      <textarea id="json" spellcheck="false"></textarea>
+    </section>
+    <section class="panel stage-wrap">
+      <div id="stage" class="stage">
+        <img id="board" alt="Latest board capture">
+      </div>
+    </section>
+  </main>
+  <script>
+    const stage = document.getElementById("stage");
+    const board = document.getElementById("board");
+    const statusNode = document.getElementById("status");
+    const jsonNode = document.getElementById("json");
+    const reloadButton = document.getElementById("reload");
+    const saveButton = document.getElementById("save");
+
+    let currentState = null;
+    let lines = null;
+    let dragging = null;
+
+    function median(values) {
+      if (!values.length) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      if (sorted.length % 2) return sorted[mid];
+      return (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    async function loadJson(path) {
+      const response = await fetch(path + "?ts=" + Date.now(), { cache: "no-store" });
+      if (!response.ok) throw new Error("Failed to load " + path);
+      return response.json();
+    }
+
+    async function maybeLoadJson(path) {
+      const response = await fetch(path + "?ts=" + Date.now(), { cache: "no-store" });
+      if (!response.ok) return null;
+      return response.json();
+    }
+
+    function deriveLinesFromMeta(meta) {
+      const grouped = {};
+      for (const stat of meta.cell_stats || []) {
+        const outer = stat.outer_box || stat.box;
+        const row = stat.row;
+        const col = stat.col;
+        grouped[row + "," + col] = outer;
+      }
+      const colLefts = [];
+      const colRights = [];
+      const rowTops = [];
+      const rowBottoms = [];
+      for (let col = 0; col < 4; col++) {
+        const lefts = [];
+        const rights = [];
+        for (let row = 0; row < 4; row++) {
+          const box = grouped[row + "," + col];
+          if (!box) continue;
+          lefts.push(box[0]);
+          rights.push(box[2]);
+        }
+        colLefts.push(median(lefts));
+        colRights.push(median(rights));
+      }
+      for (let row = 0; row < 4; row++) {
+        const tops = [];
+        const bottoms = [];
+        for (let col = 0; col < 4; col++) {
+          const box = grouped[row + "," + col];
+          if (!box) continue;
+          tops.push(box[1]);
+          bottoms.push(box[3]);
+        }
+        rowTops.push(median(tops));
+        rowBottoms.push(median(bottoms));
+      }
+      return { col_lefts: colLefts, col_rights: colRights, row_tops: rowTops, row_bottoms: rowBottoms };
+    }
+
+    function buildPayload() {
+      if (!lines || !currentState) return {};
+      const width = board.naturalWidth;
+      const height = board.naturalHeight;
+      const cellBoxes = [];
+      for (let row = 0; row < 4; row++) {
+        for (let col = 0; col < 4; col++) {
+          cellBoxes.push({
+            row,
+            col,
+            box: [
+              lines.col_lefts[col],
+              lines.row_tops[row],
+              lines.col_rights[col],
+              lines.row_bottoms[row],
+            ],
+          });
+        }
+      }
+      return {
+        capture_id: currentState.latest_capture_id,
+        board_image: currentState.latest_board,
+        meta_path: currentState.latest_meta,
+        image_size: { width, height },
+        col_lefts: lines.col_lefts,
+        col_rights: lines.col_rights,
+        row_tops: lines.row_tops,
+        row_bottoms: lines.row_bottoms,
+        normalized: {
+          col_lefts: lines.col_lefts.map((value) => Number((value / width).toFixed(6))),
+          col_rights: lines.col_rights.map((value) => Number((value / width).toFixed(6))),
+          row_tops: lines.row_tops.map((value) => Number((value / height).toFixed(6))),
+          row_bottoms: lines.row_bottoms.map((value) => Number((value / height).toFixed(6))),
+        },
+        cell_boxes: cellBoxes,
+        saved_at: new Date().toISOString(),
+      };
+    }
+
+    function renderJson() {
+      jsonNode.value = JSON.stringify(buildPayload(), null, 2);
+    }
+
+    function clearLines() {
+      stage.querySelectorAll(".line").forEach((node) => node.remove());
+    }
+
+    function createLine(axis, index, value, label) {
+      const node = document.createElement("div");
+      node.className = "line " + axis;
+      node.dataset.axis = axis;
+      node.dataset.index = String(index);
+      const tag = document.createElement("span");
+      tag.textContent = label;
+      node.appendChild(tag);
+      if (axis === "vertical") {
+        node.style.left = value + "px";
+      } else {
+        node.style.top = value + "px";
+      }
+      node.addEventListener("mousedown", (event) => {
+        dragging = { axis, index };
+        event.preventDefault();
+      });
+      stage.appendChild(node);
+    }
+
+    function renderLines() {
+      if (!lines) return;
+      clearLines();
+      lines.col_lefts.forEach((value, index) => createLine("vertical", index, value, "c" + index + "_left"));
+      lines.col_rights.forEach((value, index) => createLine("vertical", index + 4, value, "c" + index + "_right"));
+      lines.row_tops.forEach((value, index) => createLine("horizontal", index, value, "r" + index + "_top"));
+      lines.row_bottoms.forEach((value, index) => createLine("horizontal", index + 4, value, "r" + index + "_bottom"));
+      renderJson();
+    }
+
+    function orderedBounds(values, minGap, maxValue) {
+      const out = [...values];
+      for (let i = 1; i < out.length; i++) {
+        out[i] = Math.max(out[i], out[i - 1] + minGap);
+      }
+      for (let i = out.length - 2; i >= 0; i--) {
+        out[i] = Math.min(out[i], out[i + 1] - minGap);
+      }
+      return out.map((value) => clamp(value, 0, maxValue));
+    }
+
+    function moveLine(clientX, clientY) {
+      if (!dragging || !lines) return;
+      const rect = stage.getBoundingClientRect();
+      if (dragging.axis === "vertical") {
+        const x = clamp(clientX - rect.left, 0, board.naturalWidth);
+        if (dragging.index < 4) {
+          lines.col_lefts[dragging.index] = x;
+          lines.col_lefts = orderedBounds(lines.col_lefts, 4, board.naturalWidth);
+        } else {
+          const idx = dragging.index - 4;
+          lines.col_rights[idx] = x;
+          lines.col_rights = orderedBounds(lines.col_rights, 4, board.naturalWidth);
+        }
+        for (let i = 0; i < 4; i++) {
+          if (lines.col_rights[i] <= lines.col_lefts[i] + 8) {
+            lines.col_rights[i] = lines.col_lefts[i] + 8;
+          }
+        }
+        lines.col_rights = orderedBounds(lines.col_rights, 4, board.naturalWidth);
+      } else {
+        const y = clamp(clientY - rect.top, 0, board.naturalHeight);
+        if (dragging.index < 4) {
+          lines.row_tops[dragging.index] = y;
+          lines.row_tops = orderedBounds(lines.row_tops, 4, board.naturalHeight);
+        } else {
+          const idx = dragging.index - 4;
+          lines.row_bottoms[idx] = y;
+          lines.row_bottoms = orderedBounds(lines.row_bottoms, 4, board.naturalHeight);
+        }
+        for (let i = 0; i < 4; i++) {
+          if (lines.row_bottoms[i] <= lines.row_tops[i] + 8) {
+            lines.row_bottoms[i] = lines.row_tops[i] + 8;
+          }
+        }
+        lines.row_bottoms = orderedBounds(lines.row_bottoms, 4, board.naturalHeight);
+      }
+      renderLines();
+    }
+
+    async function loadLatest() {
+      currentState = await loadJson("live_status.json");
+      statusNode.textContent = currentState.message || "Loaded.";
+      if (!currentState.latest_board || !currentState.latest_meta) {
+        jsonNode.value = "";
+        return;
+      }
+      await new Promise((resolve) => {
+        board.onload = resolve;
+        board.src = currentState.latest_board + "?ts=" + Date.now();
+      });
+      stage.style.width = board.naturalWidth + "px";
+      stage.style.height = board.naturalHeight + "px";
+
+      const saved = await maybeLoadJson("grid_calibration.json");
+      if (saved && saved.board_image === currentState.latest_board) {
+        lines = {
+          col_lefts: saved.col_lefts,
+          col_rights: saved.col_rights,
+          row_tops: saved.row_tops,
+          row_bottoms: saved.row_bottoms,
+        };
+        statusNode.innerHTML = '<span class="saved">Loaded saved calibration for this capture.</span>';
+      } else {
+        const meta = await loadJson(currentState.latest_meta);
+        lines = deriveLinesFromMeta(meta);
+      }
+      renderLines();
+    }
+
+    async function saveCalibration() {
+      const payload = buildPayload();
+      const response = await fetch("save_grid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error("Save failed");
+      }
+      statusNode.innerHTML = '<span class="saved">Saved grid calibration to grid_calibration.json</span>';
+      renderJson();
+    }
+
+    reloadButton.addEventListener("click", () => {
+      loadLatest().catch((error) => {
+        statusNode.textContent = "Load failed: " + error.message;
+      });
+    });
+
+    saveButton.addEventListener("click", () => {
+      saveCalibration().catch((error) => {
+        statusNode.textContent = "Save failed: " + error.message;
+      });
+    });
+
+    window.addEventListener("mousemove", (event) => moveLine(event.clientX, event.clientY));
+    window.addEventListener("mouseup", () => {
+      dragging = null;
+    });
+
+    loadLatest().catch((error) => {
+      statusNode.textContent = "Load failed: " + error.message;
+    });
   </script>
 </body>
 </html>
@@ -397,8 +834,33 @@ def build_move_event(
 def start_dashboard_server(session_dir: Path, port: int) -> tuple[ThreadingHTTPServer, Thread, str]:
     dashboard_path = session_dir / "dashboard.html"
     dashboard_path.write_text(DASHBOARD_HTML)
-    handler = partial(SimpleHTTPRequestHandler, directory=str(session_dir))
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    grid_editor_path = session_dir / "grid_editor.html"
+    grid_editor_path.write_text(GRID_EDITOR_HTML)
+
+    class SessionHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(session_dir), **kwargs)
+
+        def do_POST(self) -> None:
+            if self.path.rstrip("/") != "/save_grid":
+                self.send_error(404, "File not found")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = self.rfile.read(length)
+                data = json.loads(payload.decode("utf-8"))
+                (session_dir / "grid_calibration.json").write_text(json.dumps(data, indent=2))
+            except Exception as exc:  # noqa: BLE001
+                self.send_error(400, f"Could not save grid calibration: {exc}")
+                return
+            body = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), SessionHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{server.server_address[1]}/dashboard.html"
@@ -409,6 +871,12 @@ def image_name(capture_id: Optional[int], suffix: str) -> Optional[str]:
     if capture_id is None:
         return None
     return f"{capture_id:06d}_{suffix}.png"
+
+
+def meta_name(capture_id: Optional[int]) -> Optional[str]:
+    if capture_id is None:
+        return None
+    return f"{capture_id:06d}_meta.json"
 
 
 def status_payload(
@@ -458,6 +926,7 @@ def status_payload(
         "latest_board_overlay": image_name(latest_capture, "board_overlay"),
         "latest_board": image_name(latest_capture, "board"),
         "latest_preview": image_name(latest_capture, "preview"),
+        "latest_meta": meta_name(latest_capture),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "failure_reasons": failure_reasons or [],
         "direction_sequence": event.get("direction_sequence", []) if event else [],
