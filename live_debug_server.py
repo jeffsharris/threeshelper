@@ -96,6 +96,12 @@ DASHBOARD_HTML = """<!doctype html>
       margin: 0 0 12px;
       font-size: 18px;
     }
+    .board-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
     .chips {
       display: flex;
       flex-wrap: wrap;
@@ -211,45 +217,71 @@ DASHBOARD_HTML = """<!doctype html>
       box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.18);
     }
     .tile.cue {
-      width: 78px;
-      min-width: 78px;
+      width: 46px;
+      min-width: 46px;
       aspect-ratio: 0.76;
-      border-radius: 16px;
-      font-size: 34px;
-      box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.18);
+      border-radius: 12px;
+      font-size: 21px;
+      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.18);
     }
-    .next-layout {
-      display: grid;
-      grid-template-columns: 150px 1fr;
-      gap: 16px;
-      align-items: start;
-    }
-    .observed-card {
+    .next-compact {
+      min-width: 152px;
+      padding: 10px 12px;
       border-radius: 18px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       background: rgba(255, 255, 255, 0.04);
-      min-height: 140px;
-      display: grid;
-      place-items: center;
-      padding: 14px;
-      text-align: center;
+    }
+    .next-compact-label {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
     .observed-value {
       display: flex;
-      justify-content: center;
+      justify-content: flex-start;
       gap: 8px;
-      min-height: 96px;
+      min-height: 52px;
       align-items: center;
-      margin-bottom: 12px;
+      margin: 8px 0 6px;
     }
-    .observed-note {
+    .next-compact-note {
       color: var(--muted);
-      font-size: 12px;
-      line-height: 1.5;
+      font-size: 11px;
+      line-height: 1.45;
     }
     .probs {
       display: grid;
       gap: 10px;
+    }
+    .bag-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .bag-chip {
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .bag-top {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .bag-count {
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .bag-sub {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
     }
     .prob-row {
       display: grid;
@@ -325,11 +357,15 @@ DASHBOARD_HTML = """<!doctype html>
       }
     }
     @media (max-width: 720px) {
-      .next-layout {
+      .board-header {
         grid-template-columns: 1fr;
+        display: grid;
       }
       .board-grid {
         gap: 8px;
+      }
+      .bag-grid {
+        grid-template-columns: 1fr;
       }
       .tile {
         font-size: 28px;
@@ -362,26 +398,28 @@ DASHBOARD_HTML = """<!doctype html>
     </section>
     <section class="stack">
       <section class="panel alt">
-        <h2>Current Board</h2>
-        <div class="meta" id="boardSource">Waiting for a board...</div>
+        <div class="board-header">
+          <div>
+            <h2>Current Board</h2>
+            <div class="meta" id="boardSource">Waiting for a board...</div>
+          </div>
+          <div class="next-compact">
+            <div class="next-compact-label">Next Tile</div>
+            <div class="observed-value" id="observedPreview"></div>
+            <div class="next-compact-note" id="observedPreviewNote">Waiting for preview detection...</div>
+          </div>
+        </div>
         <div class="board-grid" id="boardGrid"></div>
       </section>
       <section class="panel">
-        <h2>Next Tile</h2>
-        <div class="next-layout">
-          <div class="observed-card">
-            <div>
-              <div class="label">Visible Cue</div>
-              <div class="observed-value" id="observedPreview"></div>
-              <div class="observed-note" id="observedPreviewNote">Waiting for preview detection...</div>
-            </div>
-          </div>
-          <div>
-            <div class="label">Following Cue Odds</div>
-            <div class="probs" id="probabilities"></div>
-            <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
-            <div class="bundle-wrap" id="bonusBundles"></div>
-          </div>
+        <h2>Coming Tile Probabilities</h2>
+        <div class="label">Small Tile Bag</div>
+        <div class="bag-grid" id="bagGrid"></div>
+        <div class="section">
+          <div class="label">Tile Odds After The Visible Cue</div>
+          <div class="probs" id="probabilities"></div>
+          <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
+          <div class="bundle-wrap" id="bonusBundles"></div>
         </div>
       </section>
       <section class="panel">
@@ -411,6 +449,7 @@ DASHBOARD_HTML = """<!doctype html>
     const latestEventNode = document.getElementById("latestEvent");
     const issuesNode = document.getElementById("issues");
     const sessionMetaNode = document.getElementById("sessionMeta");
+    const bagGridNode = document.getElementById("bagGrid");
     const observedPreviewNode = document.getElementById("observedPreview");
     const observedPreviewNoteNode = document.getElementById("observedPreviewNote");
     const probabilitiesNode = document.getElementById("probabilities");
@@ -526,13 +565,36 @@ DASHBOARD_HTML = """<!doctype html>
       observedPreviewNoteNode.textContent = (preview && preview.note) ? preview.note : "No preview data available.";
     }
 
+    function renderBag(expected) {
+      const smallBag = expected && expected.small_bag ? expected.small_bag : [];
+      if (!smallBag.length) {
+        bagGridNode.innerHTML = "";
+        return;
+      }
+      const chips = smallBag.map((item) => {
+        const tile = tileMarkup(tileInfoForValue(item.value), "mini");
+        return [
+          `<div class="bag-chip">`,
+          `<div class="bag-top">`,
+          tile,
+          `<div class="bag-count">${item.remaining}</div>`,
+          `</div>`,
+          `<div class="bag-sub">${item.remaining} of ${item.base} left in the current 12-tile bag.</div>`,
+          `</div>`
+        ].join("");
+      });
+      bagGridNode.innerHTML = chips.join("");
+    }
+
     function renderProbabilities(expected) {
       if (!expected || !expected.available) {
+        bagGridNode.innerHTML = "";
         probabilitiesNode.innerHTML = "";
         probabilitiesNoteNode.textContent = (expected && expected.note) ? expected.note : "Probability model unavailable.";
         bonusBundlesNode.innerHTML = "";
         return;
       }
+      renderBag(expected);
       const rows = (expected.items || []).map((item) => {
         const width = Math.max(0, Math.min(100, item.percent || 0));
         const tile = tileMarkup(tileInfoForValue(item.value), "mini");
@@ -976,6 +1038,26 @@ class LiveTrackerEngine:
         probs = cycle.probabilities()
         bonus_windows = cycle.bonus_windows()
         bonus_value_probs = cycle.bonus_value_probabilities()
+        small_bag = [
+            {
+                "key": "gray",
+                "value": ws.SMALL_TILE_VALUES["gray"],
+                "remaining": cycle.small_counts.get("gray", 0),
+                "base": 4,
+            },
+            {
+                "key": "blue",
+                "value": ws.SMALL_TILE_VALUES["blue"],
+                "remaining": cycle.small_counts.get("blue", 0),
+                "base": 4,
+            },
+            {
+                "key": "red",
+                "value": ws.SMALL_TILE_VALUES["red"],
+                "remaining": cycle.small_counts.get("red", 0),
+                "base": 4,
+            },
+        ]
         items = [
             {"key": "blue", "value": ws.SMALL_TILE_VALUES["blue"], "probability": probs.get("blue", 0.0)},
             {"key": "red", "value": ws.SMALL_TILE_VALUES["red"], "probability": probs.get("red", 0.0)},
@@ -995,7 +1077,10 @@ class LiveTrackerEngine:
         for item in items:
             item["percent"] = round(item["probability"] * 100.0, 1)
         bonus_total = round(large_prob * 100.0, 1)
-        note = "These odds are for the cue that should appear after the current visible tile is used."
+        note = (
+            "These odds are for the cue that should appear after the current visible tile is used. "
+            f"Bag progress: {cycle.small_pos}/12 spent."
+        )
         bundle_items = []
         if bonus_windows:
             conditional_percent = round(100.0 / len(bonus_windows), 1)
@@ -1012,6 +1097,7 @@ class LiveTrackerEngine:
         return {
             "available": True,
             "items": items,
+            "small_bag": small_bag,
             "note": note,
             "bonus_values": bonus_values,
             "bonus_bundles": bundle_items,
