@@ -14,6 +14,7 @@ COLOR_PROTOTYPES = {
     "blue": np.array([118.0, 184.0, 236.0]),
     "gray": np.array([106.0, 167.0, 208.0]),
 }
+BOARD_REL_BOX = (0.10, 0.30, 0.90, 0.83)
 
 
 def load_image(path: Path) -> np.ndarray:
@@ -153,35 +154,15 @@ def find_board_roi(arr: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, in
     """
     Return a crop around the main 4x4 board.
 
-    Uses a saturation/value mask in the center-lower portion of the screen to
-    find the bounding box; falls back to a fixed relative box if nothing is found.
+    The board position in the mirrored Threes layout is effectively fixed, while
+    saturation-based tight boxes can drift downward when the top row is mostly
+    empty. Use a stable relative crop instead.
     """
     h, w, _ = arr.shape
-    sat, val = saturation_and_value(arr)
-    ys = np.arange(h)[:, None]
-    xs = np.arange(w)[None, :]
-
-    mask = (sat > 0.25) & (val > 60)
-    mask &= ys > h * 0.32
-    mask &= ys < h * 0.92
-    mask &= np.abs(xs - w / 2) < w * 0.48
-    coords = np.argwhere(mask)
-
-    if len(coords) == 0:
-        x0 = int(w * 0.1)
-        x1 = int(w * 0.9)
-        y0 = int(h * 0.35)
-        y1 = int(h * 0.85)
-        return arr[y0:y1, x0:x1], (x0, y0, x1, y1)
-
-    y0, x0 = coords.min(axis=0)
-    y1, x1 = coords.max(axis=0)
-    pad_x = int(w * 0.03)
-    pad_y = int(h * 0.03)
-    x0 = max(0, x0 - pad_x)
-    x1 = min(w, x1 + pad_x)
-    y0 = max(0, y0 - pad_y)
-    y1 = min(h, y1 + pad_y)
+    x0 = int(w * BOARD_REL_BOX[0])
+    x1 = int(w * BOARD_REL_BOX[2])
+    y0 = int(h * BOARD_REL_BOX[1])
+    y1 = int(h * BOARD_REL_BOX[3])
     return arr[y0:y1, x0:x1], (x0, y0, x1, y1)
 
 

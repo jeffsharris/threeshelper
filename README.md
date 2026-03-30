@@ -109,9 +109,10 @@ python3 mirroring_control.py --exit-game
 
 Useful notes:
 - Works against the live `iPhone Mirroring` window; the game does not need to exist as a local app target.
-- The driver now distinguishes `title`, `game`, `postgame`, `menu`, and `end_confirm` scenes before deciding which transition routine to run.
+- The driver now distinguishes `title`, `game`, `game_over`, `postgame`, `menu`, and `end_confirm` scenes before deciding which transition routine to run.
 - If the visible board does not look like a fresh game, tile-cycle probability tracking is disabled automatically and the script still plays.
-- `--start-game` taps the title-screen `PLAY THREES` button; `--retry-game` taps the post-game `Retry` button.
+- `--start-game` waits for a valid fresh board before seeding the tracker.
+- `--retry-game` handles the full end-of-game path: `game_over -> swipe to summary -> Retry -> new game`.
 - `--exit-game` follows the full abort path: `menu -> MAIN MENU -> END GAME -> title`.
 - `--tap-rel X Y` sends a single tap at relative window coordinates, which is intended for future game-over/new-game flows.
 - `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.

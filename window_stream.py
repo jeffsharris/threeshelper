@@ -51,75 +51,50 @@ KEYCODES = {
 }
 
 
-LARGE_DELAY_SMALLS = 20  # no large tile before this many small placements have been seen.
-LARGE_PREVIEW_OFFSET = 1  # previews are one step ahead of placements.
-LARGE_DELAY_PREVIEWS = LARGE_DELAY_SMALLS + LARGE_PREVIEW_OFFSET
-LARGE_SPAN_SMALLS = 20   # one large per span of 20 small tiles (in 21 positions)
+SMALL_BAG_SIZE = 12
+BONUS_TRIGGER_TILE = 48
+BONUS_PROBABILITY = 1.0 / 21.0
 
 
 class TileCycle:
     """
-    Tracks small-tile pool (12 small tiles: 4 red/4 blue/4 gray) and large-tile pool
-    (1 large inserted once per 20 small tiles, in one of 21 positions after the first 20 drawn;
-    the initial on-board tiles are not counted toward that 20). Provides next-tile probabilities.
+    Tracks the 12-tile small bag (4 red / 4 blue / 4 gray) and whether bonus tiles
+    are eligible based on the largest tile currently on the board.
     """
 
     def __init__(self) -> None:
         self.small_counts: Dict[str, int] = {"red": 4, "blue": 4, "gray": 4}
-        self.small_pos = 0  # small tiles seen in current 12-span
-        self.small_seen_total = 0  # total small tiles seen since game start
-        self.span_small_pos = 0  # small tiles seen in the current 20-span (for large scheduling)
-        self.large_pending = False  # True when the span's large tile has not yet appeared
+        self.small_pos = 0  # small tiles consumed in the current 12-tile bag
+        self.small_seen_total = 0  # total small tiles consumed since game start
+        self.max_tile = 0
 
     def _reset_small(self) -> None:
         self.small_counts = {"red": 4, "blue": 4, "gray": 4}
         self.small_pos = 0
 
-    def _start_new_large_span(self) -> None:
-        """Begin a new 20-small span with a fresh pending large."""
-        self.span_small_pos = 0
-        self.large_pending = True
+    def set_max_tile(self, max_tile: int) -> None:
+        self.max_tile = max(0, int(max_tile))
 
     def update(self, label: str) -> None:
         """
-        Record an observed tile label (red/blue/gray/large_candidates/unknown).
-        Advances cycle positions and updates remaining pools.
-        Small spans advance only on non-large tiles (large tiles are inserted in addition).
+        Record an observed preview label. Only red/blue/gray consume the 12-tile bag.
+        Bonus tiles are generated independently once the board has reached 48.
         """
-        is_large = label == "large_candidates"
-        count_as_small = not is_large  # unknowns count as small to keep cycles moving.
-        if count_as_small:
+        if label in self.small_counts:
             self.small_pos += 1
             self.small_seen_total += 1
-            # Large scheduling begins after the first LARGE_DELAY_PREVIEWS previews.
-            if self.small_seen_total == LARGE_DELAY_PREVIEWS:
-                self._start_new_large_span()
-            elif self.small_seen_total > LARGE_DELAY_PREVIEWS:
-                self.span_small_pos += 1
-
-        if label in self.small_counts and self.small_counts[label] > 0:
-            self.small_counts[label] -= 1
-
-        if is_large and self.large_pending:
-            self.large_pending = False
-
-        if self.small_pos >= 12:
+            if self.small_counts[label] > 0:
+                self.small_counts[label] -= 1
+        if self.small_pos >= SMALL_BAG_SIZE:
             self._reset_small()
-
-        # Advance large span once the current 20 smalls are done and the large has appeared.
-        if self.small_seen_total >= LARGE_DELAY_PREVIEWS:
-            self.span_small_pos = min(self.span_small_pos, LARGE_SPAN_SMALLS)
-            if not self.large_pending and self.span_small_pos >= LARGE_SPAN_SMALLS:
-                self._start_new_large_span()
 
     def probabilities(self) -> Dict[str, float]:
         """
-        Return probabilities for next tile: red, blue, gray, large.
-        Small probabilities use remaining counts divided by remaining slots in the current 12-span.
-        Large probability follows the 1-in-(remaining slots) model for the current 20-span,
-        and is 0 until 20 small tiles have been seen since game start.
+        Return probabilities for next preview:
+        - red/blue/gray follow the remaining 12-tile bag.
+        - large_candidates becomes possible with fixed 1/21 probability once a 48-tile exists.
         """
-        small_slots_left = max(1, 12 - self.small_pos)
+        small_slots_left = max(1, SMALL_BAG_SIZE - self.small_pos)
 
         probs: Dict[str, float] = {}
         for color, remaining in self.small_counts.items():
@@ -129,32 +104,43 @@ class TileCycle:
         return probs
 
     def large_probability(self) -> float:
-        """Probability that the next tile is large."""
-        # No large tiles in the first LARGE_DELAY_PREVIEWS previews.
-        if self.small_seen_total < LARGE_DELAY_PREVIEWS:
+        """Probability that the next preview is the bonus (+) hint."""
+        if self.max_tile < BONUS_TRIGGER_TILE:
             return 0.0
-        if not self.large_pending:
-            return 0.0
-        remaining_slots = max(1, 21 - self.span_small_pos)
-        return 1.0 / remaining_slots
+        return BONUS_PROBABILITY
+
+    def bonus_values(self) -> List[int]:
+        """
+        Return the possible bonus-tile values for the current board max.
+        In Threes!, once a 48-tile exists, the bonus tile is chosen uniformly from
+        6, 12, 24, ... up to max_tile / 8.
+        """
+        if self.max_tile < BONUS_TRIGGER_TILE:
+            return []
+        values: List[int] = []
+        value = 6
+        limit = max(6, self.max_tile // 8)
+        while value <= limit:
+            values.append(value)
+            value *= 2
+        return values
 
     def snapshot(self) -> Tuple[Dict[str, int], int, int, int, bool, int]:
         return (
             self.small_counts.copy(),
             self.small_pos,
             self.small_seen_total,
-            self.span_small_pos,
-            self.large_pending,
+            self.max_tile,
+            False,  # retained for backward compatibility with older history tuples
             0,  # reserved for backward compatibility
         )
 
     def restore(self, snapshot: Tuple[Dict[str, int], int, int, int, bool, int]) -> None:
-        counts, s_pos, small_seen_total, span_small_pos, large_pending, _reserved = snapshot
+        counts, s_pos, small_seen_total, max_tile, _unused_flag, _reserved = snapshot
         self.small_counts = counts.copy()
         self.small_pos = s_pos
         self.small_seen_total = small_seen_total
-        self.span_small_pos = span_small_pos
-        self.large_pending = large_pending
+        self.max_tile = max_tile
 
 
 def format_state(tile_cycle: TileCycle, show_debug: bool = True) -> str:
@@ -176,9 +162,9 @@ def format_state(tile_cycle: TileCycle, show_debug: bool = True) -> str:
     move_idx = tile_cycle.small_seen_total
     parts = [f"move={move_idx}", f"pool[{remaining}]: {pool_str}", f"P(large)={large_prob:.1f}%"]
     if show_debug:
-        parts.append(
-            f"dbg span={tile_cycle.span_small_pos}/20 pend={tile_cycle.large_pending}"
-        )
+        bonus_vals = tile_cycle.bonus_values()
+        vals_str = ",".join(str(v) for v in bonus_vals) if bonus_vals else "-"
+        parts.append(f"dbg max={tile_cycle.max_tile} bonus={vals_str}")
     return " | ".join(parts)
 
 
@@ -212,6 +198,7 @@ THREE_HASH_HEX = [
 ]
 # Max Hamming distance to count as a '3' when compared to the above hashes.
 THREE_HASH_THRESHOLD = 6
+THREE_CONSENSUS_DIST_THRESHOLD = 0.35
 
 
 def cell_binarize(cell: np.ndarray, thresh: int = 140) -> np.ndarray:
@@ -381,10 +368,24 @@ def classify_gray_tile(cell: np.ndarray) -> Optional[str]:
         if label:
             return label
     data = load_gray_detector()
-    if not data:
+    gap_threshold = float(data.get("gap_threshold", 0.0)) if data else 0.0
+    best_label, best_dist, best_threshold, second_best = _gray_template_best_match(cell)
+    if not best_label:
         return None
+    gap = second_best - best_dist if second_best < float("inf") else best_dist
+    if best_dist <= best_threshold and gap >= gap_threshold:
+        return best_label
+    return None
+
+
+def _gray_template_best_match(
+    cell: np.ndarray,
+) -> Tuple[Optional[str], float, float, float]:
+    """Return the best raw template match for a gray numeric tile."""
+    data = load_gray_detector()
+    if not data:
+        return None, float("inf"), float("inf"), float("inf")
     detectors = data.get("detectors", [])
-    gap_threshold = float(data.get("gap_threshold", 0.0))
     best_label: Optional[str] = None
     best_dist = float("inf")
     best_threshold = float("inf")
@@ -409,12 +410,23 @@ def classify_gray_tile(cell: np.ndarray) -> Optional[str]:
                 best_threshold = float(thresholds.get(label, float("inf")))
             elif dist < second_best:
                 second_best = dist
-    if not best_label:
-        return None
-    gap = second_best - best_dist if second_best < float("inf") else best_dist
-    if best_dist <= best_threshold and gap >= gap_threshold:
-        return best_label
-    return None
+    return best_label, best_dist, best_threshold, second_best
+
+
+def is_three_by_consensus(cell: np.ndarray) -> bool:
+    """
+    Accept a gray tile as "3" when two independent raw detectors agree.
+    This catches soft-missed 3s from newer mirrored-device captures without
+    loosening the general numeric thresholds.
+    """
+    hog_model = gh.load_model()
+    if not hog_model:
+        return False
+    raw_hog_label = gh.predict_label(cell, hog_model, use_thresholds=False)
+    if raw_hog_label != CELL_GRAY_TOKEN:
+        return False
+    best_label, best_dist, _best_threshold, _second_best = _gray_template_best_match(cell)
+    return best_label == CELL_GRAY_TOKEN and best_dist <= THREE_CONSENSUS_DIST_THRESHOLD
 
 
 def load_three_hashes() -> List[imagehash.ImageHash]:
@@ -566,9 +578,11 @@ def classify_cell(
     mh = int(h * 0.08)
     mw = int(w * 0.08)
     cell = cell[mh : h - mh, mw : w - mw]
+    cell_mean = float(cell.reshape(-1, 3).mean())
 
-    # Empty if overall very dark.
-    if cell.reshape(-1, 3).mean() < blank_threshold:
+    # Only very dark cells are immediately empty. Brighter cells may still be
+    # gray-number tiles even when the adaptive blank threshold spikes.
+    if cell_mean < min(blank_threshold, 80.0):
         return TOKEN_EMPTY
 
     # Center patch mean color.
@@ -608,8 +622,12 @@ def classify_cell(
     gray_label = classify_gray_tile(gray_source)
     if gray_label:
         return gray_label
+    if is_three_by_consensus(gray_source):
+        return CELL_GRAY_TOKEN
     if is_three_by_template(gray_source) or is_three_by_hash(gray_source):
         return CELL_GRAY_TOKEN
+    if cell_mean < blank_threshold:
+        return TOKEN_EMPTY
     return TOKEN_OTHER
 
 
@@ -911,9 +929,14 @@ def render_move_table(
 
     move_line = f"move={tile_cycle.small_seen_total}"
     p_large = f"P(large)={tile_cycle.large_probability() * 100:.1f}%"
-    batch20 = f"20-span: {tile_cycle.span_small_pos}/{LARGE_SPAN_SMALLS}"
-    batch12 = f"12-span: {tile_cycle.small_pos}/12"
-    large_lines_raw = [move_line, p_large, batch20, batch12]
+    max_line = f"max={tile_cycle.max_tile}"
+    bonus_vals = tile_cycle.bonus_values()
+    if bonus_vals:
+        bonus_line = "bonus: " + ",".join(str(v) for v in bonus_vals)
+    else:
+        bonus_line = "bonus: off"
+    bag_line = f"12-span: {tile_cycle.small_pos}/{SMALL_BAG_SIZE}"
+    large_lines_raw = [move_line, p_large, max_line, f"{bonus_line} | {bag_line}"]
     large_w = max(_visual_width(line) for line in large_lines_raw)
     large_lines = large_lines_raw + [" " * large_w] * max(0, len(board_lines) - len(large_lines_raw))
 
@@ -1238,6 +1261,29 @@ def _count_board_small_tiles(board: List[List[str]]) -> Dict[str, int]:
     return counts
 
 
+def token_to_value(token: str) -> int:
+    """Return the numeric value for a rendered board token."""
+    if token == TOKEN_EMPTY:
+        return 0
+    if token == SMALL_COLOR_MAP["red"]:
+        return 1
+    if token == SMALL_COLOR_MAP["blue"]:
+        return 2
+    try:
+        return int(token)
+    except (TypeError, ValueError):
+        return 0
+
+
+def board_max_tile(board: List[List[str]]) -> int:
+    """Return the largest numeric tile currently visible on the board."""
+    max_tile = 0
+    for row in board:
+        for cell in row:
+            max_tile = max(max_tile, token_to_value(cell))
+    return max_tile
+
+
 def _board_has_unknowns(board: List[List[str]]) -> bool:
     """Return True if any board cell is unknown."""
     for row in board:
@@ -1277,21 +1323,17 @@ def preview_possible(tile_cycle: "TileCycle", preview_label: str) -> Tuple[bool,
     """
     Return (is_possible, reason) for the current preview tile under the tile_cycle state.
     - red/blue/gray must have remaining count > 0.
-    - large requires non-zero large probability (i.e., pending and beyond delay).
-    Also flags the case where large probability is 1.0 but the preview is not large.
+    - large requires a 48+ tile on the board, which enables the independent bonus rule.
     """
     if preview_label in ("red", "blue", "gray"):
         remaining = tile_cycle.small_counts.get(preview_label, 0)
         if remaining > 0:
-            # If we're certain the next tile should be large, but got a small, flag it.
-            if tile_cycle.large_probability() >= 0.999:
-                return False, "expected large tile with probability 100%"
             return True, ""
         return False, f"no {preview_label} tiles remaining in pool"
     if preview_label == "large_candidates":
         if tile_cycle.large_probability() > 0:
             return True, ""
-        return False, "large tile not scheduled in current span"
+        return False, "bonus tiles not enabled yet (need a 48-tile on board)"
     return True, ""  # unknown preview labels are ignored
 
 
@@ -1323,10 +1365,8 @@ def seed_tile_cycle_from_initial_state(
     initial_seen = sum(clamped.values())
     # Board tiles have been consumed from the 12-span.
     tile_cycle.small_pos = initial_seen
-    # Large scheduling counts from the first preview tile (initial board tiles do NOT count).
     tile_cycle.small_seen_total = 0
-    tile_cycle.span_small_pos = 0
-    tile_cycle.large_pending = False
+    tile_cycle.set_max_tile(board_max_tile(board))
 
 
 def list_windows_cg() -> List[Tuple[int, str, str]]:
@@ -1559,6 +1599,8 @@ def stream_labels(
 
         should_print = print_all or board_changed or label != prev_label
         if should_print:
+            board = classify_board(arr)
+            tile_cycle.set_max_tile(board_max_tile(board))
             tile_cycle.update(label)
             state_str = format_state(tile_cycle)
             ts = time.strftime("%H:%M:%S")
@@ -1624,6 +1666,7 @@ def dump_board_state(window_id: int) -> None:
     preview_label, _debug = classify_array(arr)
     tc = TileCycle()
     seed_tile_cycle_from_initial_state(tc, board, preview_label)
+    tc.set_max_tile(board_max_tile(board))
     print(render_move_table(board, preview_label, tc))
 
 
@@ -1665,7 +1708,7 @@ def stream_labels_on_keys(
     """
     events = start_key_listener()
     tile_cycle = TileCycle()
-    history: list[Tuple[Dict[str, int], int, int, int]] = []
+    history: list[Tuple[Dict[str, int], int, int, int, bool, int]] = []
     recorder = None
     initial_check = True
     prev_board: Optional[List[List[str]]] = None
@@ -1697,6 +1740,7 @@ def stream_labels_on_keys(
         prev_preview_label = preview_label
         tile_cycle = TileCycle()
         seed_tile_cycle_from_initial_state(tile_cycle, board, preview_label)
+        tile_cycle.set_max_tile(board_max_tile(board))
         history.clear()
         ok, reason = preview_possible(tile_cycle, preview_label)
         if not ok:
@@ -1765,6 +1809,7 @@ def stream_labels_on_keys(
                     return
         prev_board = board
         prev_preview_label = label
+        tile_cycle.set_max_tile(board_max_tile(board))
         ok, reason = preview_possible(tile_cycle, label)
         if not ok:
             print_error(f"preview '{label}' not possible: {reason}")
