@@ -4,6 +4,7 @@ import webbrowser
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Dict, List, Optional
 
 import mirroring_control as mc
@@ -393,13 +394,15 @@ def build_move_event(
     return event
 
 
-def start_dashboard_server(session_dir: Path, port: int) -> tuple[ThreadingHTTPServer, str]:
+def start_dashboard_server(session_dir: Path, port: int) -> tuple[ThreadingHTTPServer, Thread, str]:
     dashboard_path = session_dir / "dashboard.html"
     dashboard_path.write_text(DASHBOARD_HTML)
     handler = partial(SimpleHTTPRequestHandler, directory=str(session_dir))
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     url = f"http://127.0.0.1:{server.server_address[1]}/dashboard.html"
-    return server, url
+    return server, thread, url
 
 
 def image_name(capture_id: Optional[int], suffix: str) -> Optional[str]:
@@ -468,7 +471,10 @@ def main() -> None:
     args = parse_args()
     window_id, window_info = mc.resolve_window(args.window_id, args.auto_window_prefix)
     recorder = HarnessRecorder(args.dataset_dir, window_info=window_info)
-    dashboard_server, dashboard_url = start_dashboard_server(recorder.session_dir, args.dashboard_port)
+    dashboard_server, dashboard_thread, dashboard_url = start_dashboard_server(
+        recorder.session_dir,
+        args.dashboard_port,
+    )
     try:
         print(f"Using window {window_id}", flush=True)
         print(f"Recording run to {recorder.session_dir}", flush=True)
@@ -801,6 +807,7 @@ def main() -> None:
     finally:
         dashboard_server.shutdown()
         dashboard_server.server_close()
+        dashboard_thread.join(timeout=1.0)
 
 
 if __name__ == "__main__":
