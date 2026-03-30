@@ -155,10 +155,10 @@ def values_to_board(values: Sequence[Sequence[int]]) -> List[List[str]]:
         for value in row:
             if value <= 0:
                 token_row.append(ws.TOKEN_EMPTY)
-            elif value == 1:
-                token_row.append(ws.SMALL_COLOR_MAP["red"])
-            elif value == 2:
+            elif value == ws.SMALL_TILE_VALUES["blue"]:
                 token_row.append(ws.SMALL_COLOR_MAP["blue"])
+            elif value == ws.SMALL_TILE_VALUES["red"]:
+                token_row.append(ws.SMALL_COLOR_MAP["red"])
             else:
                 token_row.append(str(value))
         board.append(token_row)
@@ -173,11 +173,11 @@ def bonus_values_for_max(max_tile: int) -> List[int]:
 
 def expected_insert_values(preview_label: str, max_tile_before: int) -> List[int]:
     if preview_label == "red":
-        return [1]
+        return [ws.SMALL_TILE_VALUES["red"]]
     if preview_label == "blue":
-        return [2]
+        return [ws.SMALL_TILE_VALUES["blue"]]
     if preview_label == "gray":
-        return [3]
+        return [ws.SMALL_TILE_VALUES["gray"]]
     if preview_label == "large_candidates":
         return bonus_values_for_max(max_tile_before)
     return []

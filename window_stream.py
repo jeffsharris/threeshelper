@@ -55,6 +55,11 @@ KEYCODES = {
 SMALL_BAG_SIZE = 12
 BONUS_TRIGGER_TILE = 48
 BONUS_PROBABILITY = 1.0 / 21.0
+SMALL_TILE_VALUES = {
+    "red": 2,
+    "blue": 1,
+    "gray": 3,
+}
 
 
 class TileCycle:
@@ -116,19 +121,45 @@ class TileCycle:
 
     def bonus_values(self) -> List[int]:
         """
-        Return the possible bonus-tile values for the current board max.
-        In Threes!, once a 48-tile exists, the bonus tile is chosen uniformly from
-        6, 12, 24, ... up to max_tile / 8.
+        Return the ordered support for bonus tiles at the current board max.
+
+        If the largest tile on the board is M, the possible bonus bundles range from
+        [6, 12, 24] up to [M/4, M/2, M]. The support therefore spans
+        6, 12, 24, ... up to M.
         """
         if self.max_tile < BONUS_TRIGGER_TILE:
             return []
         values: List[int] = []
         value = 6
-        limit = max(6, self.max_tile // 8)
+        limit = max(6, self.max_tile)
         while value <= limit:
             values.append(value)
             value *= 2
         return values
+
+    def bonus_windows(self) -> List[List[int]]:
+        """
+        Return all equally likely contiguous 3-value bonus bundles.
+        """
+        values = self.bonus_values()
+        if len(values) < 3:
+            return []
+        return [values[idx : idx + 3] for idx in range(len(values) - 2)]
+
+    def bonus_value_probabilities(self) -> Dict[int, float]:
+        """
+        Return the conditional probability of each bonus value once a bonus bundle
+        has been selected.
+        """
+        windows = self.bonus_windows()
+        if not windows:
+            return {}
+        hits: Dict[int, int] = {value: 0 for value in self.bonus_values()}
+        total_slots = len(windows) * 3
+        for window in windows:
+            for value in window:
+                hits[value] += 1
+        return {value: count / total_slots for value, count in hits.items() if count > 0}
 
     def snapshot(self) -> Tuple[Dict[str, int], int, int, int, bool, int]:
         return (
@@ -1521,9 +1552,9 @@ def token_to_value(token: str) -> int:
     if token == TOKEN_EMPTY:
         return 0
     if token == SMALL_COLOR_MAP["red"]:
-        return 1
+        return SMALL_TILE_VALUES["red"]
     if token == SMALL_COLOR_MAP["blue"]:
-        return 2
+        return SMALL_TILE_VALUES["blue"]
     try:
         return int(token)
     except (TypeError, ValueError):

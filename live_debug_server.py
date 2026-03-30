@@ -120,10 +120,14 @@ DASHBOARD_HTML = """<!doctype html>
       overflow: hidden;
       border: 1px solid var(--border);
       background: #0a0d13;
-      min-height: 320px;
+      min-height: 220px;
       display: flex;
       align-items: center;
       justify-content: center;
+    }
+    .screen-phone {
+      width: min(100%, 430px);
+      margin: 0 auto;
     }
     img {
       width: 100%;
@@ -167,6 +171,7 @@ DASHBOARD_HTML = """<!doctype html>
       grid-template-columns: repeat(4, minmax(56px, 1fr));
       gap: 10px;
       margin-top: 12px;
+      max-width: 520px;
     }
     .tile {
       aspect-ratio: 0.84;
@@ -197,6 +202,22 @@ DASHBOARD_HTML = """<!doctype html>
       background: var(--tile-blue);
       color: #fff;
     }
+    .tile.mini {
+      width: 38px;
+      min-width: 38px;
+      aspect-ratio: 0.76;
+      border-radius: 10px;
+      font-size: 18px;
+      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.18);
+    }
+    .tile.cue {
+      width: 78px;
+      min-width: 78px;
+      aspect-ratio: 0.76;
+      border-radius: 16px;
+      font-size: 34px;
+      box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.18);
+    }
     .next-layout {
       display: grid;
       grid-template-columns: 150px 1fr;
@@ -214,8 +235,11 @@ DASHBOARD_HTML = """<!doctype html>
       text-align: center;
     }
     .observed-value {
-      font-size: 34px;
-      line-height: 1;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      min-height: 96px;
+      align-items: center;
       margin-bottom: 12px;
     }
     .observed-note {
@@ -229,10 +253,15 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .prob-row {
       display: grid;
-      grid-template-columns: 64px 1fr 56px;
+      grid-template-columns: 72px 1fr 56px;
       gap: 10px;
       align-items: center;
       font-size: 13px;
+    }
+    .prob-tile {
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .prob-bar {
       height: 12px;
@@ -251,6 +280,41 @@ DASHBOARD_HTML = """<!doctype html>
       font-size: 12px;
       line-height: 1.6;
       margin-top: 12px;
+    }
+    .bundle-wrap {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .bundle-label {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .bundle-grid {
+      display: grid;
+      gap: 8px;
+    }
+    .bundle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .bundle-tiles {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .bundle-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
     }
     .issues.ok {
       color: var(--good);
@@ -286,8 +350,10 @@ DASHBOARD_HTML = """<!doctype html>
       <h2>Current Screen</h2>
       <div class="chips" id="chips"></div>
       <div class="image-wrap">
-        <img id="fullImage" alt="Current mirrored screen">
-        <div id="fullPlaceholder" class="placeholder">Waiting for the first capture...</div>
+        <div class="screen-phone">
+          <img id="fullImage" alt="Current mirrored screen">
+          <div id="fullPlaceholder" class="placeholder">Waiting for the first capture...</div>
+        </div>
       </div>
       <div class="section">
         <div class="label">Recent Events</div>
@@ -306,7 +372,7 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="observed-card">
             <div>
               <div class="label">Visible Cue</div>
-              <div class="observed-value" id="observedPreview">?</div>
+              <div class="observed-value" id="observedPreview"></div>
               <div class="observed-note" id="observedPreviewNote">Waiting for preview detection...</div>
             </div>
           </div>
@@ -314,6 +380,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div class="label">Following Cue Odds</div>
             <div class="probs" id="probabilities"></div>
             <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
+            <div class="bundle-wrap" id="bonusBundles"></div>
           </div>
         </div>
       </section>
@@ -348,6 +415,7 @@ DASHBOARD_HTML = """<!doctype html>
     const observedPreviewNoteNode = document.getElementById("observedPreviewNote");
     const probabilitiesNode = document.getElementById("probabilities");
     const probabilitiesNoteNode = document.getElementById("probabilitiesNote");
+    const bonusBundlesNode = document.getElementById("bonusBundles");
     const fullImageNode = document.getElementById("fullImage");
     const fullPlaceholderNode = document.getElementById("fullPlaceholder");
 
@@ -407,11 +475,24 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     function tileInfo(token) {
-      if (token === "🟥") return { cls: "tile red", label: "1" };
-      if (token === "🟦") return { cls: "tile blue", label: "2" };
-      if (token === "·") return { cls: "tile empty", label: "" };
-      if (token === "X") return { cls: "tile empty", label: "?" };
-      return { cls: "tile gray", label: String(token || "") };
+      if (token === "🟥") return { kind: "red", label: "2" };
+      if (token === "🟦") return { kind: "blue", label: "1" };
+      if (token === "·") return { kind: "empty", label: "" };
+      if (token === "X") return { kind: "empty", label: "?" };
+      return { kind: "gray", label: String(token || "") };
+    }
+
+    function tileInfoForValue(value) {
+      if (value === 1) return { kind: "blue", label: "1" };
+      if (value === 2) return { kind: "red", label: "2" };
+      if (value === 3) return { kind: "gray", label: "3" };
+      if (value === null || value === undefined) return { kind: "empty", label: "?" };
+      return { kind: "gray", label: String(value) };
+    }
+
+    function tileMarkup(info, variant) {
+      const variantClass = variant ? ` ${variant}` : "";
+      return `<div class="tile ${info.kind}${variantClass}">${info.label}</div>`;
     }
 
     function renderBoard(board) {
@@ -423,7 +504,7 @@ DASHBOARD_HTML = """<!doctype html>
       for (const row of board) {
         for (const token of row) {
           const info = tileInfo(token);
-          html.push(`<div class="${info.cls}">${info.label}</div>`);
+          html.push(tileMarkup(info, ""));
         }
       }
       boardGridNode.innerHTML = html.join("");
@@ -431,7 +512,17 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     function renderObservedPreview(preview) {
-      observedPreviewNode.textContent = (preview && preview.text) ? preview.text : "?";
+      const values = (preview && preview.values) ? preview.values : [];
+      const mode = preview && preview.mode ? preview.mode : "unknown";
+      if (!values.length) {
+        observedPreviewNode.innerHTML = "";
+      } else if (mode === "bundle_generic") {
+        observedPreviewNode.innerHTML = values.map(() => tileMarkup({ kind: "gray", label: "?" }, "cue")).join("");
+      } else {
+        observedPreviewNode.innerHTML = values
+          .map((value) => tileMarkup(tileInfoForValue(value), "cue"))
+          .join("");
+      }
       observedPreviewNoteNode.textContent = (preview && preview.note) ? preview.note : "No preview data available.";
     }
 
@@ -439,13 +530,15 @@ DASHBOARD_HTML = """<!doctype html>
       if (!expected || !expected.available) {
         probabilitiesNode.innerHTML = "";
         probabilitiesNoteNode.textContent = (expected && expected.note) ? expected.note : "Probability model unavailable.";
+        bonusBundlesNode.innerHTML = "";
         return;
       }
       const rows = (expected.items || []).map((item) => {
         const width = Math.max(0, Math.min(100, item.percent || 0));
+        const tile = tileMarkup(tileInfoForValue(item.value), "mini");
         return [
           `<div class="prob-row">`,
-          `<div>${item.label}</div>`,
+          `<div class="prob-tile">${tile}</div>`,
           `<div class="prob-bar"><div class="prob-fill" style="width:${width}%"></div></div>`,
           `<div>${width.toFixed(1)}%</div>`,
           `</div>`
@@ -453,6 +546,24 @@ DASHBOARD_HTML = """<!doctype html>
       });
       probabilitiesNode.innerHTML = rows.join("");
       probabilitiesNoteNode.textContent = expected.note || "";
+      const bundles = expected.bonus_bundles || [];
+      if (!bundles.length) {
+        bonusBundlesNode.innerHTML = "";
+        return;
+      }
+      const bundleRows = bundles.map((bundle) => {
+        const tiles = (bundle.values || []).map((value) => tileMarkup(tileInfoForValue(value), "mini")).join("");
+        return [
+          `<div class="bundle-row">`,
+          `<div class="bundle-tiles">${tiles}</div>`,
+          `<div class="bundle-meta">${(bundle.conditional_percent || 0).toFixed(1)}% of bonus cues</div>`,
+          `</div>`
+        ].join("");
+      });
+      bonusBundlesNode.innerHTML = [
+        `<div class="bundle-label">Bonus Bundles</div>`,
+        `<div class="bundle-grid">${bundleRows.join("")}</div>`,
+      ].join("");
     }
 
     function renderState(state) {
@@ -826,35 +937,23 @@ class LiveTrackerEngine:
 
     def _observed_preview_payload(self, frame: Optional[mc.FrameState]) -> Dict[str, object]:
         if frame is None:
-            return {"label": None, "text": "Unavailable", "note": "No active game preview is visible."}
+            return {"label": None, "mode": "none", "values": [], "note": "No active game preview is visible."}
         max_tile = ws.board_max_tile(frame.board)
         label = frame.preview_label
         if label == "red":
-            return {"label": label, "text": "1", "note": "Observed red cue."}
+            return {"label": label, "mode": "single", "values": [ws.SMALL_TILE_VALUES["red"]], "note": "Observed red cue."}
         if label == "blue":
-            return {"label": label, "text": "2", "note": "Observed blue cue."}
+            return {"label": label, "mode": "single", "values": [ws.SMALL_TILE_VALUES["blue"]], "note": "Observed blue cue."}
         if label == "gray":
-            return {"label": label, "text": "3", "note": "Observed gray cue."}
+            return {"label": label, "mode": "single", "values": [ws.SMALL_TILE_VALUES["gray"]], "note": "Observed gray cue."}
         if label == "large_candidates":
-            bonus_values = ws.TileCycle()
-            bonus_values.set_max_tile(max_tile)
-            values = bonus_values.bonus_values()
-            if not values:
-                label_text = "bonus"
-            elif len(values) <= 3:
-                label_text = "/".join(str(v) for v in values)
-            else:
-                label_text = "/".join(str(v) for v in values[:3]) + "/..."
             return {
                 "label": label,
-                "text": label_text,
-                "note": (
-                    "Observed large-tile preview band."
-                    if not values
-                    else f"Observed large-tile preview band. Candidates: {', '.join(str(v) for v in values)}."
-                ),
+                "mode": "bundle_generic",
+                "values": [None, None, None],
+                "note": f"Observed large-tile preview band. Current max tile is {max_tile}.",
             }
-        return {"label": label, "text": str(label), "note": "Observed preview cue."}
+        return {"label": label, "mode": "unknown", "values": [], "note": "Observed preview cue."}
 
     def _probability_payload(self, frame: Optional[mc.FrameState]) -> Dict[str, object]:
         if frame is None:
@@ -875,33 +974,47 @@ class LiveTrackerEngine:
         cycle.restore(self.last_snapshot)
         cycle.set_max_tile(max_tile)
         probs = cycle.probabilities()
+        bonus_windows = cycle.bonus_windows()
+        bonus_value_probs = cycle.bonus_value_probabilities()
         items = [
-            {"key": "red", "label": "1", "probability": probs.get("red", 0.0)},
-            {"key": "blue", "label": "2", "probability": probs.get("blue", 0.0)},
-            {"key": "gray", "label": "3", "probability": probs.get("gray", 0.0)},
+            {"key": "blue", "value": ws.SMALL_TILE_VALUES["blue"], "probability": probs.get("blue", 0.0)},
+            {"key": "red", "value": ws.SMALL_TILE_VALUES["red"], "probability": probs.get("red", 0.0)},
+            {"key": "gray", "value": ws.SMALL_TILE_VALUES["gray"], "probability": probs.get("gray", 0.0)},
         ]
         large_prob = probs.get("large_candidates", 0.0)
-        if large_prob > 0 and bonus_values:
-            per_bonus = large_prob / len(bonus_values)
-            for value in bonus_values:
+        if large_prob > 0 and bonus_value_probs:
+            for value in sorted(bonus_value_probs):
                 items.append(
                     {
                         "key": f"bonus_{value}",
-                        "label": str(value),
-                        "probability": per_bonus,
+                        "value": value,
+                        "probability": large_prob * bonus_value_probs[value],
                     }
                 )
+        items.sort(key=lambda item: int(item["value"]))
         for item in items:
             item["percent"] = round(item["probability"] * 100.0, 1)
         bonus_total = round(large_prob * 100.0, 1)
         note = "These odds are for the cue that should appear after the current visible tile is used."
-        if bonus_values:
-            note += f" Bonus total: {bonus_total:.1f}% across {', '.join(str(v) for v in bonus_values)}."
+        bundle_items = []
+        if bonus_windows:
+            conditional_percent = round(100.0 / len(bonus_windows), 1)
+            for idx, window in enumerate(bonus_windows):
+                bundle_items.append(
+                    {
+                        "key": f"bundle_{idx}",
+                        "values": window,
+                        "conditional_percent": conditional_percent,
+                        "overall_percent": round((large_prob / len(bonus_windows)) * 100.0, 1),
+                    }
+                )
+            note += f" Bonus total: {bonus_total:.1f}%. Each 3-tile bundle below is equally likely once a bonus cue appears."
         return {
             "available": True,
             "items": items,
             "note": note,
             "bonus_values": bonus_values,
+            "bonus_bundles": bundle_items,
             "max_tile": max_tile,
         }
 
@@ -1144,6 +1257,10 @@ class LiveDebugApp:
     def start_server(self) -> ThreadingHTTPServer:
         app = self
 
+        class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 if self.path.startswith("/api/state"):
@@ -1187,7 +1304,7 @@ class LiveDebugApp:
             def log_message(self, _format: str, *_args) -> None:
                 return
 
-        self.server = ThreadingHTTPServer((self.args.host, self.args.port), Handler)
+        self.server = ReusableThreadingHTTPServer((self.args.host, self.args.port), Handler)
         return self.server
 
     def shutdown(self) -> None:
