@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 import mirroring_control as mc
 import window_stream as ws
+from PIL import Image
 from state_hunt import (
     HarnessRecorder,
     find_transition_paths,
@@ -132,6 +133,7 @@ DASHBOARD_HTML = """<!doctype html>
         "scene=" + (state.scene || "?"),
         "game=" + (state.game_index ?? "?"),
         "move=" + (state.move_index ?? "?"),
+        "updated=" + (state.updated_at || "?"),
         "message=" + (state.message || ""),
       ];
       if (state.direction_sequence && state.direction_sequence.length) {
@@ -145,12 +147,15 @@ DASHBOARD_HTML = """<!doctype html>
       }
       lines.push("session=" + (state.session_dir || ""));
       detailNode.textContent = lines.join("\\n");
-      const captureKey = state.latest_capture_id ? String(state.latest_capture_id) + ":" + (state.latest_board_overlay || "") : null;
-      if (state.latest_board_overlay && captureKey !== lastCaptureKey) {
-        captureNode.src = state.latest_board_overlay + "?capture=" + encodeURIComponent(captureKey);
+      const displayImage = state.display_image || state.latest_board_overlay || state.latest_full || null;
+      const captureKey = displayImage
+        ? String(state.live_view_id || state.latest_capture_id || 0) + ":" + displayImage
+        : null;
+      if (displayImage && captureKey !== lastCaptureKey) {
+        captureNode.src = displayImage + "?capture=" + encodeURIComponent(captureKey);
         lastCaptureKey = captureKey;
       } else {
-        if (!state.latest_board_overlay) {
+        if (!displayImage) {
           captureNode.removeAttribute("src");
           lastCaptureKey = null;
         }
@@ -851,6 +856,12 @@ def start_dashboard_server(session_dir: Path, port: int) -> tuple[ThreadingHTTPS
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(session_dir), **kwargs)
 
+        def end_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            super().end_headers()
+
         def do_POST(self) -> None:
             if self.path.rstrip("/") != "/save_grid":
                 self.send_error(404, "File not found")
@@ -892,6 +903,81 @@ def meta_name(capture_id: Optional[int]) -> Optional[str]:
     return f"{capture_id:06d}_meta.json"
 
 
+def best_display_frame(state: Optional[mc.ScreenState]) -> Optional[mc.FrameState]:
+    if state is None:
+        return None
+    return state.frame or state.candidate_frame
+
+
+def frame_status_key(frame: Optional[mc.FrameState]) -> Optional[tuple]:
+    if frame is None:
+        return None
+    return (
+        tuple(tuple(row) for row in frame.board),
+        frame.preview_label,
+    )
+
+
+def write_live_view(
+    recorder: HarnessRecorder,
+    state: mc.ScreenState,
+    display_frame: Optional[mc.FrameState],
+    view_id: int,
+) -> Dict[str, object]:
+    full_path = recorder.session_dir / "live_full.png"
+    board_path = recorder.session_dir / "live_board.png"
+    overlay_path = recorder.session_dir / "live_board_overlay.png"
+    preview_path = recorder.session_dir / "live_preview.png"
+    meta_path = recorder.session_dir / "live_meta.json"
+
+    Image.fromarray(state.arr).save(full_path)
+    live_info: Dict[str, object] = {
+        "live_view_id": view_id,
+        "display_image": full_path.name,
+        "display_mode": "full",
+        "live_full": full_path.name,
+        "live_board": None,
+        "live_board_overlay": None,
+        "live_preview": None,
+        "live_meta": meta_path.name,
+    }
+
+    meta: Dict[str, object] = {
+        "scene": state.scene,
+        "scene_score": state.scene_score,
+        "scene_scores": state.scene_scores,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    if state.frame is not None and display_frame is not None:
+        board_roi, _board_box = ws.find_board_roi(state.arr)
+        preview_roi, _preview_box = ws.find_preview_roi(state.arr)
+        Image.fromarray(board_roi).save(board_path)
+        Image.fromarray(preview_roi).save(preview_path)
+        color_boxes, _grid_meta = ws._board_cell_boxes(
+            board_roi, inset_ratio=ws.CLASSIFY_INSET_RATIO
+        )
+        overlay_boxes = [(row, col, outer_box) for row, col, outer_box, _inner_box in color_boxes]
+        ws._draw_board_overlay(board_roi, overlay_boxes).save(overlay_path)
+        live_info.update(
+            {
+                "display_image": overlay_path.name,
+                "display_mode": "board_overlay",
+                "live_board": board_path.name,
+                "live_board_overlay": overlay_path.name,
+                "live_preview": preview_path.name,
+            }
+        )
+        meta.update(
+            {
+                "board": display_frame.board,
+                "preview_label": display_frame.preview_label,
+                "preview_debug": display_frame.preview_debug,
+            }
+        )
+    meta_path.write_text(json.dumps(meta, indent=2))
+    return live_info
+
+
 def status_payload(
     recorder: HarnessRecorder,
     *,
@@ -905,6 +991,7 @@ def status_payload(
     capture_id: Optional[int] = None,
     event: Optional[Dict[str, object]] = None,
     failure_reasons: Optional[List[str]] = None,
+    live_info: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     rendered_board = None
     board = None
@@ -946,6 +1033,8 @@ def status_payload(
         "recovered_missed_moves": event.get("recovered_missed_moves", 0) if event else 0,
         "event": event,
     }
+    if live_info:
+        payload.update(live_info)
     return payload
 
 
@@ -984,9 +1073,48 @@ def main() -> None:
         stable_state: Optional[mc.FrameState] = None
         stable_count = 0
         last_status_key: Optional[tuple] = None
+        live_view_id = 0
+
+        def publish_status(
+            *,
+            run_state: str,
+            message: str,
+            scene: Optional[str],
+            game_index: int,
+            move_index: int,
+            state: Optional[mc.ScreenState] = None,
+            frame: Optional[mc.FrameState] = None,
+            snapshot: Optional[tuple] = None,
+            capture_id: Optional[int] = None,
+            event: Optional[Dict[str, object]] = None,
+            failure_reasons: Optional[List[str]] = None,
+        ) -> None:
+            nonlocal live_view_id
+            display_frame = frame if frame is not None else best_display_frame(state)
+            live_info = None
+            if state is not None:
+                live_view_id += 1
+                live_info = write_live_view(recorder, state, display_frame, live_view_id)
+            recorder.write_status(
+                status_payload(
+                    recorder,
+                    run_state=run_state,
+                    message=message,
+                    scene=scene,
+                    game_index=game_index,
+                    move_index=move_index,
+                    frame=display_frame,
+                    snapshot=snapshot,
+                    capture_id=capture_id,
+                    event=event,
+                    failure_reasons=failure_reasons,
+                    live_info=live_info,
+                )
+            )
 
         while True:
             state = mc.capture_screen_state(window_id, args.capture_backend)
+            status_frame = best_display_frame(state)
 
             status_key = (
                 state.scene,
@@ -994,19 +1122,18 @@ def main() -> None:
                 move_index,
                 game_index,
                 last_capture_id,
+                frame_status_key(status_frame),
             )
             if state.scene in (mc.SCENE_SCREEN_OFF, mc.SCENE_PHONE_IN_USE):
                 if status_key != last_status_key:
-                    recorder.write_status(
-                        status_payload(
-                            recorder,
-                            run_state="waiting_for_device",
-                            message=f"Waiting for mirrored device to become ready: {state.scene}",
-                            scene=state.scene,
-                            game_index=game_index,
-                            move_index=move_index,
-                            capture_id=last_capture_id,
-                        )
+                    publish_status(
+                        run_state="waiting_for_device",
+                        message=f"Waiting for mirrored device to become ready: {state.scene}",
+                        scene=state.scene,
+                        game_index=game_index,
+                        move_index=move_index,
+                        state=state,
+                        capture_id=last_capture_id,
                     )
                     last_status_key = status_key
                 stable_state = None
@@ -1029,16 +1156,14 @@ def main() -> None:
                         "scene_capture": scene_path,
                     }
                 )
-                recorder.write_status(
-                    status_payload(
-                        recorder,
-                        run_state="game_end",
-                        message=f"Observed {state.scene} after {move_index} moves. Waiting for the next game.",
-                        scene=state.scene,
-                        game_index=game_index,
-                        move_index=move_index,
-                        capture_id=last_capture_id,
-                    )
+                publish_status(
+                    run_state="game_end",
+                    message=f"Observed {state.scene} after {move_index} moves. Waiting for the next game.",
+                    scene=state.scene,
+                    game_index=game_index,
+                    move_index=move_index,
+                    state=state,
+                    capture_id=last_capture_id,
                 )
                 print(f"Observed {state.scene} after {move_index} moves.", flush=True)
                 if args.max_games > 0 and game_index >= args.max_games:
@@ -1059,16 +1184,14 @@ def main() -> None:
 
             if state.scene != mc.SCENE_GAME or state.frame is None:
                 if status_key != last_status_key:
-                    recorder.write_status(
-                        status_payload(
-                            recorder,
-                            run_state="waiting_for_game",
-                            message=f"Waiting for a game board. Current scene: {state.scene}.",
-                            scene=state.scene,
-                            game_index=game_index,
-                            move_index=move_index,
-                            capture_id=last_capture_id,
-                        )
+                    publish_status(
+                        run_state="waiting_for_game",
+                        message=f"Waiting for a game board. Current scene: {state.scene}.",
+                        scene=state.scene,
+                        game_index=game_index,
+                        move_index=move_index,
+                        state=state,
+                        capture_id=last_capture_id,
                     )
                     last_status_key = status_key
                 stable_state = None
@@ -1100,18 +1223,18 @@ def main() -> None:
             if not tracked:
                 initial_error = ws._initial_state_error(settled.board, settled.preview_label)
                 if initial_error is not None and not args.attach_current_game:
-                    recorder.write_status(
-                        status_payload(
-                            recorder,
+                    if status_key != last_status_key:
+                        publish_status(
                             run_state="waiting_for_fresh_game",
                             message=f"Waiting for a fresh board: {initial_error}",
                             scene=state.scene,
                             game_index=game_index,
                             move_index=move_index,
+                            state=state,
                             frame=settled,
                             capture_id=last_capture_id,
                         )
-                    )
+                        last_status_key = status_key
                     time.sleep(args.poll)
                     continue
                 last_snapshot = seed_snapshot(settled)
@@ -1135,18 +1258,16 @@ def main() -> None:
                     print(f"tracking disabled: {initial_error}", flush=True)
                 print_frame(settled, last_snapshot)
                 print(flush=True)
-                recorder.write_status(
-                    status_payload(
-                        recorder,
-                        run_state="tracking",
-                        message="Tracking live game state.",
-                        scene=state.scene,
-                        game_index=game_index,
-                        move_index=move_index,
-                        frame=settled,
-                        snapshot=last_snapshot,
-                        capture_id=last_capture_id,
-                    )
+                publish_status(
+                    run_state="tracking",
+                    message="Tracking live game state.",
+                    scene=state.scene,
+                    game_index=game_index,
+                    move_index=move_index,
+                    state=state,
+                    frame=settled,
+                    snapshot=last_snapshot,
+                    capture_id=last_capture_id,
                 )
                 last_status_key = None
                 time.sleep(args.poll)
@@ -1154,18 +1275,16 @@ def main() -> None:
 
             if last_stable_frame is None or same_semantics(last_stable_frame, settled):
                 if args.idle_timeout > 0 and time.time() - last_move_ts > args.idle_timeout:
-                    recorder.write_status(
-                        status_payload(
-                            recorder,
-                            run_state="idle_timeout",
-                            message=f"Idle timeout reached with no observed move for {args.idle_timeout:.1f}s.",
-                            scene=state.scene,
-                            game_index=game_index,
-                            move_index=move_index,
-                            frame=last_stable_frame,
-                            snapshot=last_snapshot,
-                            capture_id=last_capture_id,
-                        )
+                    publish_status(
+                        run_state="idle_timeout",
+                        message=f"Idle timeout reached with no observed move for {args.idle_timeout:.1f}s.",
+                        scene=state.scene,
+                        game_index=game_index,
+                        move_index=move_index,
+                        state=state,
+                        frame=last_stable_frame,
+                        snapshot=last_snapshot,
+                        capture_id=last_capture_id,
                     )
                     print(f"Idle timeout reached with no observed move for {args.idle_timeout:.1f}s.", flush=True)
                     print(f"Artifacts saved to {recorder.session_dir}", flush=True)
@@ -1214,20 +1333,18 @@ def main() -> None:
                         "event": event,
                     }
                 )
-                recorder.write_status(
-                    status_payload(
-                        recorder,
-                        run_state="failure",
-                        message="Invalid tracked state detected.",
-                        scene=state.scene,
-                        game_index=game_index,
-                        move_index=move_index,
-                        frame=settled,
-                        snapshot=last_snapshot,
-                        capture_id=capture_id,
-                        event=event,
-                        failure_reasons=failure_reasons,
-                    )
+                publish_status(
+                    run_state="failure",
+                    message="Invalid tracked state detected.",
+                    scene=state.scene,
+                    game_index=game_index,
+                    move_index=move_index,
+                    state=state,
+                    frame=settled,
+                    snapshot=last_snapshot,
+                    capture_id=capture_id,
+                    event=event,
+                    failure_reasons=failure_reasons,
                 )
                 print(f"Invalid state detected: {failure_reasons}", flush=True)
                 print(f"Artifacts saved to {recorder.session_dir}", flush=True)
@@ -1261,35 +1378,31 @@ def main() -> None:
                 print(f"observed move {move_index}: {direction_text}", flush=True)
             print_frame(settled, last_snapshot)
             print(flush=True)
-            recorder.write_status(
-                status_payload(
-                    recorder,
-                    run_state="tracking",
-                    message="Tracking live game state.",
-                    scene=state.scene,
-                    game_index=game_index,
-                    move_index=move_index,
-                    frame=settled,
-                    snapshot=last_snapshot,
-                    capture_id=capture_id,
-                    event=event,
-                )
+            publish_status(
+                run_state="tracking",
+                message="Tracking live game state.",
+                scene=state.scene,
+                game_index=game_index,
+                move_index=move_index,
+                state=state,
+                frame=settled,
+                snapshot=last_snapshot,
+                capture_id=capture_id,
+                event=event,
             )
             last_status_key = None
 
             if move_index >= args.max_moves:
-                recorder.write_status(
-                    status_payload(
-                        recorder,
-                        run_state="max_moves",
-                        message=f"Reached max observed moves ({args.max_moves}).",
-                        scene=state.scene,
-                        game_index=game_index,
-                        move_index=move_index,
-                        frame=settled,
-                        snapshot=last_snapshot,
-                        capture_id=capture_id,
-                    )
+                publish_status(
+                    run_state="max_moves",
+                    message=f"Reached max observed moves ({args.max_moves}).",
+                    scene=state.scene,
+                    game_index=game_index,
+                    move_index=move_index,
+                    state=state,
+                    frame=settled,
+                    snapshot=last_snapshot,
+                    capture_id=capture_id,
                 )
                 print(f"Reached max observed moves ({args.max_moves}).", flush=True)
                 print(f"Artifacts saved to {recorder.session_dir}", flush=True)

@@ -244,6 +244,7 @@ SPECIAL_SCENE_MATCHERS = {
             "size": (64, 64),
             "refs": (
                 SCENE_REF_DIR / "phone_in_use_center.png",
+                SCENE_REF_DIR / "phone_in_use_center_20260330.png",
             ),
         },
     ),
@@ -277,6 +278,7 @@ class ScreenState:
     scene_score: float
     scene_scores: Dict[str, float]
     frame: Optional[FrameState] = None
+    candidate_frame: Optional[FrameState] = None
 
 
 @dataclass
@@ -493,25 +495,28 @@ def capture_screen_state(window_id: int, backend: str) -> ScreenState:
     arr = np.array(capture_window_image(window_id, backend))
     scene, score, scores = detect_scene(arr)
     frame = None
+    candidate_frame = None
     if scene == SCENE_UNKNOWN:
         board = ws.classify_board(arr)
         preview_label, preview_debug = ws.classify_array(arr)
         board_sig, _ = ws.board_signature(arr)
+        candidate_frame = FrameState(
+            arr=arr,
+            board=board,
+            preview_label=preview_label,
+            preview_debug=preview_debug,
+            board_sig=board_sig,
+        )
         if _is_plausible_game_frame(arr, board, preview_label):
             scene = SCENE_GAME
-            frame = FrameState(
-                arr=arr,
-                board=board,
-                preview_label=preview_label,
-                preview_debug=preview_debug,
-                board_sig=board_sig,
-            )
+            frame = candidate_frame
     return ScreenState(
         arr=arr,
         scene=scene,
         scene_score=score,
         scene_scores=scores,
         frame=frame,
+        candidate_frame=candidate_frame,
     )
 
 
