@@ -10,6 +10,9 @@ import mirroring_control as mc
 import window_stream as ws
 
 
+KNOWN_PREVIEW_LABELS = ("red", "blue", "gray", "large_candidates")
+
+
 @dataclass
 class TransitionValidation:
     valid: bool
@@ -19,6 +22,23 @@ class TransitionValidation:
     inserted_value: Optional[int] = None
     inserted_pos: Optional[Tuple[int, int]] = None
     best_mismatch: Optional[Dict[str, object]] = None
+
+
+@dataclass
+class TransitionStep:
+    direction: str
+    preview_label: str
+    inserted_value: int
+    inserted_pos: Tuple[int, int]
+    eligible_positions: List[Tuple[int, int]]
+    expected_values: List[int]
+    after_board: List[List[str]]
+
+
+@dataclass
+class TransitionPath:
+    steps: List[TransitionStep]
+    preview_check: Dict[str, object]
 
 
 def _json_safe(value):
@@ -126,6 +146,23 @@ def board_to_values(board: Sequence[Sequence[str]]) -> Optional[List[List[int]]]
             value_row.append(ws.token_to_value(token))
         values.append(value_row)
     return values
+
+
+def values_to_board(values: Sequence[Sequence[int]]) -> List[List[str]]:
+    board: List[List[str]] = []
+    for row in values:
+        token_row: List[str] = []
+        for value in row:
+            if value <= 0:
+                token_row.append(ws.TOKEN_EMPTY)
+            elif value == 1:
+                token_row.append(ws.SMALL_COLOR_MAP["red"])
+            elif value == 2:
+                token_row.append(ws.SMALL_COLOR_MAP["blue"])
+            else:
+                token_row.append(str(value))
+        board.append(token_row)
+    return board
 
 
 def bonus_values_for_max(max_tile: int) -> List[int]:
@@ -248,6 +285,152 @@ def preview_check_from_snapshot(
     return out
 
 
+def possible_preview_labels(
+    snapshot: Optional[Tuple[Dict[str, int], int, int, int, bool, int]],
+    board: Sequence[Sequence[str]],
+) -> List[str]:
+    if snapshot is None:
+        return list(KNOWN_PREVIEW_LABELS)
+    cycle = ws.TileCycle()
+    cycle.restore(snapshot)
+    cycle.set_max_tile(ws.board_max_tile(board))
+    probs = cycle.probabilities()
+    labels: List[str] = []
+    for label in KNOWN_PREVIEW_LABELS:
+        if probs.get(label, 0.0) > 0:
+            labels.append(label)
+    return labels
+
+
+def advance_snapshot_with_preview(
+    snapshot: Optional[Tuple[Dict[str, int], int, int, int, bool, int]],
+    board: Sequence[Sequence[str]],
+    preview_label: str,
+) -> Optional[Tuple[Dict[str, int], int, int, int, bool, int]]:
+    if snapshot is None:
+        return None
+    check = preview_check_from_snapshot(snapshot, board, preview_label)
+    if not check.get("valid", False):
+        return None
+    next_snapshot = check.get("next_snapshot")
+    if isinstance(next_snapshot, tuple) or next_snapshot is None:
+        return next_snapshot
+    return tuple(next_snapshot)
+
+
+def generate_transition_steps(
+    before_board: Sequence[Sequence[str]],
+    preview_label: str,
+) -> List[TransitionStep]:
+    before_values = board_to_values(before_board)
+    if before_values is None:
+        return []
+    max_tile_before = ws.board_max_tile(before_board)
+    expected_values = expected_insert_values(preview_label, max_tile_before)
+    if not expected_values:
+        return []
+
+    steps: List[TransitionStep] = []
+    for direction in mc.DIRECTIONS:
+        afterstate, eligible_positions = simulate_base_move(before_values, direction)
+        if not eligible_positions:
+            continue
+        for pos in eligible_positions:
+            for value in expected_values:
+                candidate = [row[:] for row in afterstate]
+                candidate[pos[0]][pos[1]] = value
+                steps.append(
+                    TransitionStep(
+                        direction=direction,
+                        preview_label=preview_label,
+                        inserted_value=value,
+                        inserted_pos=pos,
+                        eligible_positions=list(eligible_positions),
+                        expected_values=list(expected_values),
+                        after_board=values_to_board(candidate),
+                    )
+                )
+    return steps
+
+
+def serialize_transition_step(step: TransitionStep) -> Dict[str, object]:
+    return {
+        "direction": step.direction,
+        "preview_label": step.preview_label,
+        "inserted_value": step.inserted_value,
+        "inserted_pos": list(step.inserted_pos),
+        "eligible_positions": [list(pos) for pos in step.eligible_positions],
+        "expected_values": step.expected_values,
+        "after_board": step.after_board,
+    }
+
+
+def find_transition_paths(
+    before_board: Sequence[Sequence[str]],
+    before_preview: str,
+    before_snapshot: Optional[Tuple[Dict[str, int], int, int, int, bool, int]],
+    after_board: Sequence[Sequence[str]],
+    after_preview: str,
+    max_depth: int = 2,
+    max_paths: int = 8,
+) -> List[TransitionPath]:
+    matches: List[TransitionPath] = []
+    target_board = [list(row) for row in after_board]
+    seen: set[Tuple[Tuple[Tuple[str, ...], ...], str, Optional[Tuple[Tuple[Tuple[str, int], ...], int, int, int, bool, int]], int]] = set()
+
+    def freeze_board(board: Sequence[Sequence[str]]) -> Tuple[Tuple[str, ...], ...]:
+        return tuple(tuple(row) for row in board)
+
+    def freeze_snapshot(
+        snapshot: Optional[Tuple[Dict[str, int], int, int, int, bool, int]],
+    ) -> Optional[Tuple[Tuple[Tuple[str, int], ...], int, int, int, bool, int]]:
+        if snapshot is None:
+            return None
+        counts, deck_index, dealt, max_tile, bonus_active, bonus_index = snapshot
+        return (
+            tuple(sorted((str(k), int(v)) for k, v in counts.items())),
+            int(deck_index),
+            int(dealt),
+            int(max_tile),
+            bool(bonus_active),
+            int(bonus_index),
+        )
+
+    def dfs(
+        current_board: Sequence[Sequence[str]],
+        current_preview: str,
+        current_snapshot: Optional[Tuple[Dict[str, int], int, int, int, bool, int]],
+        depth: int,
+        steps: List[TransitionStep],
+    ) -> None:
+        if len(matches) >= max_paths:
+            return
+        state_key = (freeze_board(current_board), current_preview, freeze_snapshot(current_snapshot), depth)
+        if state_key in seen:
+            return
+        seen.add(state_key)
+
+        for step in generate_transition_steps(current_board, current_preview):
+            if step.after_board == target_board:
+                preview_check = preview_check_from_snapshot(current_snapshot, step.after_board, after_preview)
+                if preview_check.get("valid", False):
+                    matches.append(TransitionPath(steps=steps + [step], preview_check=preview_check))
+                    if len(matches) >= max_paths:
+                        return
+            if depth <= 1:
+                continue
+            for next_preview in possible_preview_labels(current_snapshot, step.after_board):
+                next_snapshot = advance_snapshot_with_preview(current_snapshot, step.after_board, next_preview)
+                if current_snapshot is not None and next_snapshot is None:
+                    continue
+                dfs(step.after_board, next_preview, next_snapshot, depth - 1, steps + [step])
+                if len(matches) >= max_paths:
+                    return
+
+    dfs(before_board, before_preview, before_snapshot, max_depth, [])
+    return matches
+
+
 def ordered_directions(order_mode: str, rng, rotation: int) -> Tuple[List[str], int]:
     directions = list(mc.DIRECTIONS)
     if order_mode == "random":
@@ -277,6 +460,7 @@ class HarnessRecorder:
         self.dataset = ws.DatasetRecorder(base_dir, window_info=window_info)
         self.events_path = self.dataset.session_dir / "events.jsonl"
         self.failures_path = self.dataset.session_dir / "failures.jsonl"
+        self.status_path = self.dataset.session_dir / "live_status.json"
         self.scene_dir = self.dataset.session_dir / "scenes"
         self.scene_dir.mkdir(parents=True, exist_ok=True)
         self.scene_idx = 0
@@ -318,3 +502,6 @@ class HarnessRecorder:
     def append_failure(self, failure: Dict[str, object]) -> None:
         with self.failures_path.open("a") as f:
             f.write(json.dumps(_json_safe(failure)) + "\n")
+
+    def write_status(self, status: Dict[str, object]) -> None:
+        self.status_path.write_text(json.dumps(_json_safe(status), indent=2))

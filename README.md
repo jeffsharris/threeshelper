@@ -112,14 +112,24 @@ python3 mirroring_control.py --exit-game
 
 Observation and state hunts
 ---------------------------
-Watch a human-played game from the next fresh board and stop on the first invalid state:
+Watch a human-played game from the next fresh board with a live dashboard:
 ```bash
 python3 observe_human_game.py
 ```
+   - Opens a local browser dashboard and writes machine-readable state to `live_status.json` in the session directory.
+   - Keeps watching across game-over/post-game screens so you can restart and keep playing in the same session.
+   - If you play faster than the settle loop, it searches for short legal multi-move paths before declaring an invalid state.
 
 Attach to whatever game is currently visible, even if it is already mid-game:
 ```bash
 python3 observe_human_game.py --attach-current-game
+```
+
+Useful observer flags:
+```bash
+python3 observe_human_game.py --no-open-dashboard
+python3 observe_human_game.py --max-recovery-depth 2
+python3 observe_human_game.py --max-games 3
 ```
 
 Run repeated self-play and stop on the first tracked invalid state:
@@ -136,7 +146,7 @@ Useful notes:
 - `--exit-game` follows the full abort path: `menu -> MAIN MENU -> END GAME -> title`.
 - `--tap-rel X Y` sends a single tap at relative window coordinates, which is intended for future game-over/new-game flows.
 - `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.
-- `observe_human_game.py` waits for a real fresh board by default, then validates each settled move and records rewindable artifacts in `datasets/human_watch/`.
+- `observe_human_game.py` waits for a real fresh board by default, validates each settled move, recovers short missed human sequences when possible, and records rewindable artifacts in `datasets/human_watch/`.
 - `hunt_invalid_states.py` uses the same validator and artifact format for autonomous repeated-play runs in `datasets/state_hunt/`.
 
 Gray tile labeling (build 3+ dataset):
