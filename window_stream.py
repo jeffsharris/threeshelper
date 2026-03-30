@@ -185,6 +185,11 @@ CLASSIFY_INSET_RATIO = 0.12
 GRAY_INSET_RATIO = CLASSIFY_INSET_RATIO
 UNKNOWN_TILE_SIZE = 96
 BOARD_GRID_CALIBRATION_PATH = Path("board_grid_calibration.json")
+_board_cell_outer_boxes_cache: Dict[
+    Tuple[int, int, Optional[Tuple[Tuple[float, ...], Tuple[float, ...], Tuple[float, ...], Tuple[float, ...]]]],
+    Tuple[List[Tuple[int, int, Tuple[int, int, int, int]]], Dict[str, object]],
+] = {}
+_cell_label_cache: Dict[bytes, str] = {}
 BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),
     "blue": np.array([132.33, 198.81, 243.71]),
@@ -535,6 +540,21 @@ def _rgb_to_hsv_mean(rgb: np.ndarray) -> Tuple[float, float, float]:
     return colorsys.rgb_to_hsv(r, g, b)
 
 
+def _cell_cache_key(cell: np.ndarray, gray_cell: Optional[np.ndarray]) -> bytes:
+    source = gray_cell if gray_cell is not None else cell
+    try:
+        resample = Image.Resampling.BILINEAR
+    except AttributeError:
+        resample = Image.BILINEAR
+    gray_small = Image.fromarray(source).convert("L").resize((16, 16), resample=resample)
+    gray_bytes = (np.array(gray_small, dtype=np.uint8) // 16).astype(np.uint8).tobytes()
+    h, w, _ = cell.shape
+    patch = cell[int(h * 0.25) : int(h * 0.75), int(w * 0.25) : int(w * 0.75)]
+    patch_mean = patch.reshape(-1, 3).mean(axis=0)
+    color_bytes = bytes(int(max(0, min(15, round(v / 16.0)))) for v in patch_mean)
+    return color_bytes + gray_bytes
+
+
 def _dynamic_blank_threshold(values: List[float], default: float) -> float:
     """Compute an Otsu-style threshold over cell brightness values."""
     if not values:
@@ -575,6 +595,17 @@ def classify_cell(
     No OCR is used.
     """
     original = cell  # keep the untrimmed cell for hash-based matching
+    gray_source = gray_cell if gray_cell is not None else original
+    cache_key = _cell_cache_key(original, gray_source)
+    cached = _cell_label_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    def remember(label: str) -> str:
+        if len(_cell_label_cache) >= 4096:
+            _cell_label_cache.clear()
+        _cell_label_cache[cache_key] = label
+        return label
 
     # Trim a small margin to avoid borders for color/blank checks.
     h, w, _ = cell.shape
@@ -586,7 +617,7 @@ def classify_cell(
     # Only very dark cells are immediately empty. Brighter cells may still be
     # gray-number tiles even when the adaptive blank threshold spikes.
     if cell_mean < min(blank_threshold, 80.0):
-        return TOKEN_EMPTY
+        return remember(TOKEN_EMPTY)
 
     # Center patch mean color.
     ch, cw, _ = cell.shape
@@ -610,28 +641,27 @@ def classify_cell(
     # Require some saturation to classify colored tiles.
     if s > 0.16 and v > 0.2:
         if red_h_dist < 0.12 and red_dist < 80 and red_dist < blue_dist:
-            return SMALL_COLOR_MAP["red"]
+            return remember(SMALL_COLOR_MAP["red"])
         if blue_h_dist < 0.12 and blue_dist < 80 and blue_dist < red_dist:
-            return SMALL_COLOR_MAP["blue"]
+            return remember(SMALL_COLOR_MAP["blue"])
 
     # Fallback to RGB-only distance checks.
     if red_dist < 60 and red_dist < blue_dist:
-        return SMALL_COLOR_MAP["red"]
+        return remember(SMALL_COLOR_MAP["red"])
     if blue_dist < 45:
-        return SMALL_COLOR_MAP["blue"]
+        return remember(SMALL_COLOR_MAP["blue"])
 
     # Everything else is gray => attempt numeric label, then fallback to 3 detector.
-    gray_source = gray_cell if gray_cell is not None else original
     gray_label = classify_gray_tile(gray_source)
     if gray_label:
-        return gray_label
+        return remember(gray_label)
     if is_three_by_consensus(gray_source):
-        return CELL_GRAY_TOKEN
+        return remember(CELL_GRAY_TOKEN)
     if is_three_by_template(gray_source) or is_three_by_hash(gray_source):
-        return CELL_GRAY_TOKEN
+        return remember(CELL_GRAY_TOKEN)
     if cell_mean < blank_threshold:
-        return TOKEN_EMPTY
-    return TOKEN_OTHER
+        return remember(TOKEN_EMPTY)
+    return remember(TOKEN_OTHER)
 
 
 def preprocess_for_ocr(cell: np.ndarray) -> Image.Image:
@@ -784,6 +814,8 @@ def load_board_grid_calibration(
 def clear_board_grid_calibration_cache() -> None:
     global _board_grid_calibration_cache
     _board_grid_calibration_cache = None
+    _board_cell_outer_boxes_cache.clear()
+    _cell_label_cache.clear()
 
 
 def _estimate_board_background_color(roi: np.ndarray) -> np.ndarray:
@@ -942,6 +974,30 @@ def _manual_board_cell_outer_boxes(
     return boxes, meta
 
 
+def _board_layout_cache_key(
+    roi: np.ndarray,
+) -> Tuple[
+    int,
+    int,
+    Optional[Tuple[Tuple[float, ...], Tuple[float, ...], Tuple[float, ...], Tuple[float, ...]]],
+]:
+    calibration = load_board_grid_calibration()
+    normalized = calibration.get("normalized") if calibration else None
+    signature = None
+    if normalized:
+        try:
+            signature = (
+                tuple(float(v) for v in normalized["col_lefts"]),
+                tuple(float(v) for v in normalized["col_rights"]),
+                tuple(float(v) for v in normalized["row_tops"]),
+                tuple(float(v) for v in normalized["row_bottoms"]),
+            )
+        except Exception:
+            signature = None
+    h, w, _ = roi.shape
+    return (h, w, signature)
+
+
 def _fallback_board_cell_outer_boxes(
     roi: np.ndarray,
 ) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int]]], Dict[str, float]]:
@@ -958,15 +1014,22 @@ def _board_cell_boxes(
     roi: np.ndarray,
     inset_ratio: float = 0.0,
 ) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int], Tuple[int, int, int, int]]], Dict[str, object]]:
-    manual = _manual_board_cell_outer_boxes(roi)
-    if manual is not None:
-        outer_boxes, meta = manual
+    cache_key = _board_layout_cache_key(roi)
+    cached = _board_cell_outer_boxes_cache.get(cache_key)
+    if cached is not None:
+        outer_boxes, meta = cached
     else:
-        detected = _detect_board_cell_outer_boxes(roi)
-        if detected is None:
-            outer_boxes, meta = _fallback_board_cell_outer_boxes(roi)
+        manual = _manual_board_cell_outer_boxes(roi)
+        if manual is not None:
+            outer_boxes, meta = manual
+            _board_cell_outer_boxes_cache[cache_key] = (outer_boxes, meta)
         else:
-            outer_boxes, meta = detected
+            detected = _detect_board_cell_outer_boxes(roi)
+            if detected is None:
+                outer_boxes, meta = _fallback_board_cell_outer_boxes(roi)
+            else:
+                outer_boxes, meta = detected
+                _board_cell_outer_boxes_cache[cache_key] = (outer_boxes, meta)
     boxes = []
     for r, c, outer_box in outer_boxes:
         boxes.append((r, c, outer_box, _apply_inset(outer_box, inset_ratio)))
