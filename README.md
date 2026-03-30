@@ -118,7 +118,7 @@ python3 live_debug_server.py --attach-current-game
 ```
    - Serves a persistent dashboard on `http://127.0.0.1:55777/dashboard.html` by default.
    - Continuously captures the mirrored phone, even when the app is not on a playable board.
-   - Shows the annotated full screen, live board overlay, parsed board, tracker state, issues, and recent events in one place.
+   - Shows the live screen, parsed board state, visible next cue, following-cue probabilities, tracker state, issues, and recent events in one place.
    - Writes the latest live state into `datasets/live_debug/session_YYYYMMDD_HHMMSS/` so the current frame and JSON remain inspectable from the filesystem.
    - Uses Quartz by default for sub-second refresh; override with `--capture-backend screencapture` if needed.
 

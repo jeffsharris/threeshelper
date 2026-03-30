@@ -14,7 +14,7 @@ from typing import Deque, Dict, List, Optional
 
 import mirroring_control as mc
 import window_stream as ws
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from state_hunt import HarnessRecorder
 from tracker_runtime import build_move_event, render_tracked_board, same_semantics, seed_snapshot
 
@@ -28,69 +28,94 @@ DASHBOARD_HTML = """<!doctype html>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #111318;
-      --panel: rgba(20, 25, 34, 0.92);
-      --panel-2: rgba(27, 33, 44, 0.92);
-      --border: #334054;
-      --text: #f4f6f8;
-      --muted: #95a2b7;
-      --good: #7ee787;
+      --bg: #10151c;
+      --panel: rgba(19, 24, 33, 0.94);
+      --panel-2: rgba(24, 30, 40, 0.94);
+      --border: #304055;
+      --text: #f5f7fa;
+      --muted: #92a0b2;
+      --good: #83e59b;
       --warn: #ffd166;
-      --bad: #ff6b6b;
-      --accent: #7cc7ff;
-      --accent-2: #9df0d1;
+      --bad: #ff7d7d;
+      --accent: #86c7ff;
+      --tile-empty: #1a1f2a;
+      --tile-gray: #97a3b8;
+      --tile-red: #ff5f82;
+      --tile-blue: #63beff;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       background:
-        radial-gradient(circle at top left, rgba(124, 199, 255, 0.12), transparent 28%),
-        radial-gradient(circle at top right, rgba(157, 240, 209, 0.08), transparent 22%),
-        linear-gradient(180deg, #161c25 0%, var(--bg) 55%);
+        radial-gradient(circle at top left, rgba(134, 199, 255, 0.12), transparent 28%),
+        linear-gradient(180deg, #18212c 0%, var(--bg) 58%);
       color: var(--text);
       font-family: Menlo, Monaco, "SFMono-Regular", "Courier New", monospace;
     }
     header {
-      max-width: 1600px;
+      max-width: 1500px;
       margin: 0 auto;
-      padding: 22px 24px 10px;
+      padding: 20px 24px 8px;
     }
     h1 {
-      margin: 0 0 8px 0;
-      font-size: 28px;
+      margin: 0 0 8px;
+      font-size: 30px;
       letter-spacing: 0.02em;
     }
     .subtitle {
       color: var(--muted);
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.6;
+      max-width: 980px;
     }
     .layout {
-      max-width: 1600px;
+      max-width: 1500px;
       margin: 0 auto;
-      padding: 0 24px 24px;
+      padding: 8px 24px 24px;
       display: grid;
-      grid-template-columns: minmax(420px, 1.25fr) minmax(360px, 1fr) minmax(320px, 0.95fr);
+      grid-template-columns: minmax(460px, 1.15fr) minmax(360px, 0.85fr);
       gap: 18px;
       align-items: start;
+    }
+    .stack {
+      display: grid;
+      gap: 18px;
     }
     .panel {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 22px;
+      border-radius: 24px;
       padding: 18px;
-      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.24);
     }
     .panel.alt {
       background: var(--panel-2);
     }
     h2 {
-      margin: 0 0 12px 0;
-      font-size: 17px;
+      margin: 0 0 12px;
+      font-size: 18px;
     }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .chip {
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      font-size: 12px;
+      line-height: 1;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .chip.good { border-color: rgba(131, 229, 155, 0.45); color: var(--good); }
+    .chip.warn { border-color: rgba(255, 209, 102, 0.45); color: var(--warn); }
+    .chip.bad { border-color: rgba(255, 125, 125, 0.45); color: var(--bad); }
+    .chip.accent { border-color: rgba(134, 199, 255, 0.45); color: var(--accent); }
     .image-wrap {
-      position: relative;
       border-radius: 18px;
       overflow: hidden;
       border: 1px solid var(--border);
@@ -112,28 +137,22 @@ DASHBOARD_HTML = """<!doctype html>
       line-height: 1.5;
       font-size: 14px;
     }
-    .chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 14px;
+    .section {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 14px;
+      margin-top: 14px;
     }
-    .chip {
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      padding: 8px 12px;
+    .label {
+      margin: 0 0 8px;
+      color: var(--muted);
       font-size: 12px;
-      line-height: 1;
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
-    .chip.good { border-color: rgba(126, 231, 135, 0.45); color: var(--good); }
-    .chip.warn { border-color: rgba(255, 209, 102, 0.45); color: var(--warn); }
-    .chip.bad { border-color: rgba(255, 107, 107, 0.45); color: var(--bad); }
-    .chip.accent { border-color: rgba(124, 199, 255, 0.45); color: var(--accent); }
-    .stack {
-      display: grid;
-      gap: 18px;
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
     }
     pre {
       margin: 0;
@@ -143,39 +162,113 @@ DASHBOARD_HTML = """<!doctype html>
       font-size: 13px;
       color: var(--text);
     }
-    .meta {
+    .board-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(56px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .tile {
+      aspect-ratio: 0.84;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: clamp(22px, 3.2vw, 34px);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      box-shadow: inset 0 -7px 0 rgba(0, 0, 0, 0.18);
+    }
+    .tile.empty {
+      background: var(--tile-empty);
+      color: rgba(255, 255, 255, 0.16);
+      box-shadow: none;
+    }
+    .tile.gray {
+      background: var(--tile-gray);
+      color: #10151c;
+    }
+    .tile.red {
+      background: var(--tile-red);
+      color: #fff;
+    }
+    .tile.blue {
+      background: var(--tile-blue);
+      color: #fff;
+    }
+    .next-layout {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .observed-card {
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      min-height: 140px;
+      display: grid;
+      place-items: center;
+      padding: 14px;
+      text-align: center;
+    }
+    .observed-value {
+      font-size: 34px;
+      line-height: 1;
+      margin-bottom: 12px;
+    }
+    .observed-note {
       color: var(--muted);
       font-size: 12px;
-      line-height: 1.55;
+      line-height: 1.5;
     }
-    .label {
-      margin: 0 0 8px;
+    .probs {
+      display: grid;
+      gap: 10px;
+    }
+    .prob-row {
+      display: grid;
+      grid-template-columns: 64px 1fr 56px;
+      gap: 10px;
+      align-items: center;
+      font-size: 13px;
+    }
+    .prob-bar {
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .prob-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(134, 199, 255, 0.88), rgba(131, 229, 155, 0.88));
+    }
+    .prob-note {
       color: var(--muted);
       font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      line-height: 1.6;
+      margin-top: 12px;
     }
-    .error {
-      color: var(--bad);
-    }
-    .success {
+    .issues.ok {
       color: var(--good);
     }
-    .section {
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
-      padding-top: 14px;
-      margin-top: 14px;
-    }
-    .mono-link {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    .mono-link:hover {
-      text-decoration: underline;
-    }
-    @media (max-width: 1280px) {
+    @media (max-width: 1180px) {
       .layout {
         grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 720px) {
+      .next-layout {
+        grid-template-columns: 1fr;
+      }
+      .board-grid {
+        gap: 8px;
+      }
+      .tile {
+        font-size: 28px;
       }
     }
   </style>
@@ -185,7 +278,7 @@ DASHBOARD_HTML = """<!doctype html>
     <h1>Threes Live Debug</h1>
     <div class="subtitle">
       Live mirrored-phone capture, live board parsing, and live tracker state in one place.
-      This page should stay up even when the phone is off-scene; the capture status will tell you why.
+      The right side is intentionally focused on the signals that matter: current board state and next-tile expectations.
     </div>
   </header>
   <main class="layout">
@@ -201,25 +294,32 @@ DASHBOARD_HTML = """<!doctype html>
         <pre id="events">Waiting for the capture loop...</pre>
       </div>
     </section>
-    <section class="panel alt">
-      <h2>Board Overlay</h2>
-      <div class="image-wrap">
-        <img id="boardImage" alt="Current board overlay">
-        <div id="boardPlaceholder" class="placeholder">Board overlay will appear as soon as a game board is detected.</div>
-      </div>
-      <div class="section">
-        <div class="label">Detected Board</div>
-        <pre id="detectedBoard">Waiting for board detection...</pre>
-      </div>
-    </section>
     <section class="stack">
+      <section class="panel alt">
+        <h2>Current Board</h2>
+        <div class="meta" id="boardSource">Waiting for a board...</div>
+        <div class="board-grid" id="boardGrid"></div>
+      </section>
+      <section class="panel">
+        <h2>Next Tile</h2>
+        <div class="next-layout">
+          <div class="observed-card">
+            <div>
+              <div class="label">Visible Cue</div>
+              <div class="observed-value" id="observedPreview">?</div>
+              <div class="observed-note" id="observedPreviewNote">Waiting for preview detection...</div>
+            </div>
+          </div>
+          <div>
+            <div class="label">Following Cue Odds</div>
+            <div class="probs" id="probabilities"></div>
+            <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
+          </div>
+        </div>
+      </section>
       <section class="panel">
         <h2>Tracker</h2>
         <div class="meta" id="trackerMeta">Waiting for tracker state...</div>
-        <div class="section">
-          <div class="label">Tracked Model</div>
-          <pre id="trackedBoard">Waiting for the first settled frame...</pre>
-        </div>
         <div class="section">
           <div class="label">Latest Event</div>
           <pre id="latestEvent">No events yet.</pre>
@@ -227,7 +327,7 @@ DASHBOARD_HTML = """<!doctype html>
       </section>
       <section class="panel">
         <h2>Issues</h2>
-        <pre id="issues">No issues recorded.</pre>
+        <pre id="issues" class="issues ok">No issues recorded.</pre>
       </section>
       <section class="panel">
         <h2>Session</h2>
@@ -237,20 +337,19 @@ DASHBOARD_HTML = """<!doctype html>
   </main>
   <script>
     const chipsNode = document.getElementById("chips");
+    const boardGridNode = document.getElementById("boardGrid");
+    const boardSourceNode = document.getElementById("boardSource");
     const eventsNode = document.getElementById("events");
-    const detectedBoardNode = document.getElementById("detectedBoard");
-    const trackedBoardNode = document.getElementById("trackedBoard");
+    const trackerMetaNode = document.getElementById("trackerMeta");
     const latestEventNode = document.getElementById("latestEvent");
     const issuesNode = document.getElementById("issues");
     const sessionMetaNode = document.getElementById("sessionMeta");
-    const trackerMetaNode = document.getElementById("trackerMeta");
+    const observedPreviewNode = document.getElementById("observedPreview");
+    const observedPreviewNoteNode = document.getElementById("observedPreviewNote");
+    const probabilitiesNode = document.getElementById("probabilities");
+    const probabilitiesNoteNode = document.getElementById("probabilitiesNote");
     const fullImageNode = document.getElementById("fullImage");
-    const boardImageNode = document.getElementById("boardImage");
     const fullPlaceholderNode = document.getElementById("fullPlaceholder");
-    const boardPlaceholderNode = document.getElementById("boardPlaceholder");
-
-    let lastRevision = -1;
-    let latestState = null;
 
     function chipClass(kind) {
       if (kind === "good") return "chip good";
@@ -266,11 +365,15 @@ DASHBOARD_HTML = """<!doctype html>
         state.tracker.run_state === "tracking" ? "good" :
         state.tracker.run_state === "settling" ? "warn" :
         "accent";
+      const sceneClass =
+        state.scene === "game" ? "good" :
+        (state.scene === "phone_in_use" || state.scene === "screen_off") ? "warn" :
+        "accent";
+      const ageClass = ageMs > 1200 ? "bad" : (ageMs > 450 ? "warn" : "good");
       const chips = [
-        { label: "scene=" + (state.scene || "?"), kind: state.scene === "game" ? "good" : (state.scene === "phone_in_use" ? "warn" : "accent") },
+        { label: "scene=" + (state.scene || "?"), kind: sceneClass },
         { label: "tracker=" + (state.tracker.run_state || "?"), kind: trackerClass },
-        { label: "rev=" + (state.revision ?? "?"), kind: "accent" },
-        { label: "age=" + ageMs + "ms", kind: ageMs > 1200 ? "bad" : (ageMs > 450 ? "warn" : "good") },
+        { label: "age=" + ageMs + "ms", kind: ageClass },
         { label: "capture=" + (state.capture_elapsed_ms ?? "?") + "ms", kind: "accent" },
         { label: "backend=" + (state.backend || "?"), kind: "accent" },
       ];
@@ -303,14 +406,75 @@ DASHBOARD_HTML = """<!doctype html>
       preloader.src = url;
     }
 
+    function tileInfo(token) {
+      if (token === "🟥") return { cls: "tile red", label: "1" };
+      if (token === "🟦") return { cls: "tile blue", label: "2" };
+      if (token === "·") return { cls: "tile empty", label: "" };
+      if (token === "X") return { cls: "tile empty", label: "?" };
+      return { cls: "tile gray", label: String(token || "") };
+    }
+
+    function renderBoard(board) {
+      if (!board || !board.length) {
+        boardGridNode.innerHTML = "";
+        return false;
+      }
+      const html = [];
+      for (const row of board) {
+        for (const token of row) {
+          const info = tileInfo(token);
+          html.push(`<div class="${info.cls}">${info.label}</div>`);
+        }
+      }
+      boardGridNode.innerHTML = html.join("");
+      return true;
+    }
+
+    function renderObservedPreview(preview) {
+      observedPreviewNode.textContent = (preview && preview.text) ? preview.text : "?";
+      observedPreviewNoteNode.textContent = (preview && preview.note) ? preview.note : "No preview data available.";
+    }
+
+    function renderProbabilities(expected) {
+      if (!expected || !expected.available) {
+        probabilitiesNode.innerHTML = "";
+        probabilitiesNoteNode.textContent = (expected && expected.note) ? expected.note : "Probability model unavailable.";
+        return;
+      }
+      const rows = (expected.items || []).map((item) => {
+        const width = Math.max(0, Math.min(100, item.percent || 0));
+        return [
+          `<div class="prob-row">`,
+          `<div>${item.label}</div>`,
+          `<div class="prob-bar"><div class="prob-fill" style="width:${width}%"></div></div>`,
+          `<div>${width.toFixed(1)}%</div>`,
+          `</div>`
+        ].join("");
+      });
+      probabilitiesNode.innerHTML = rows.join("");
+      probabilitiesNoteNode.textContent = expected.note || "";
+    }
+
     function renderState(state) {
       renderChips(state);
-      detectedBoardNode.textContent = state.detected.rendered_board || state.detected.message || "No detected board.";
-      trackedBoardNode.textContent = state.tracker.rendered_board || state.tracker.message || "No tracked state yet.";
-      latestEventNode.textContent = state.tracker.latest_event_pretty || "No events yet.";
-      issuesNode.textContent = (state.issues && state.issues.length) ? state.issues.join("\\n") : "No issues recorded.";
-      eventsNode.textContent = (state.recent_events && state.recent_events.length) ? state.recent_events.join("\\n") : "No recent events yet.";
       trackerMetaNode.textContent = state.tracker.message || "Waiting for tracker state.";
+      latestEventNode.textContent = state.tracker.latest_event_pretty || "No events yet.";
+      const board = state.tracker.board || state.detected.board;
+      if (renderBoard(board)) {
+        boardSourceNode.textContent = state.scene === "game"
+          ? "Live parsed board from the mirrored game."
+          : "Last tracked board before the current non-game scene.";
+      } else {
+        boardSourceNode.textContent = state.detected.message || "No board currently available.";
+      }
+      renderObservedPreview(state.tracker.observed_preview);
+      renderProbabilities(state.tracker.expected_next);
+      const issues = (state.issues && state.issues.length) ? state.issues : [];
+      issuesNode.className = issues.length ? "issues" : "issues ok";
+      issuesNode.textContent = issues.length ? issues.join("\\n") : "No issues recorded.";
+      eventsNode.textContent = (state.recent_events && state.recent_events.length)
+        ? state.recent_events.join("\\n")
+        : "No recent events yet.";
       sessionMetaNode.textContent = [
         "session=" + (state.session_dir || ""),
         "window=" + (state.window_title || "?"),
@@ -325,25 +489,17 @@ DASHBOARD_HTML = """<!doctype html>
         state.revision,
         "Waiting for the first capture..."
       );
-      swapImage(
-        boardImageNode,
-        boardPlaceholderNode,
-        state.images.board_overlay,
-        state.revision,
-        "Board overlay will appear as soon as a game board is detected."
-      );
     }
 
     async function refresh() {
       const response = await fetch("/api/state?ts=" + Date.now(), { cache: "no-store" });
       if (!response.ok) throw new Error("Failed to load live state");
       const state = await response.json();
-      latestState = state;
       renderState(state);
-      lastRevision = state.revision ?? lastRevision;
     }
 
     refresh().catch((error) => {
+      issuesNode.className = "issues";
       issuesNode.textContent = "Dashboard error: " + error.message;
     });
     setInterval(() => refresh().catch(() => {}), 150);
@@ -401,66 +557,18 @@ def _png_bytes(image: Image.Image) -> bytes:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
-
-
-def _font(size: int) -> ImageFont.ImageFont:
-    try:
-        return ImageFont.truetype("Arial.ttf", size)
-    except Exception:
-        return ImageFont.load_default()
-
-
 def draw_full_annotated(
     state: mc.ScreenState,
     display_frame: Optional[mc.FrameState],
 ) -> Image.Image:
-    img = Image.fromarray(state.arr).convert("RGBA")
-    draw = ImageDraw.Draw(img, "RGBA")
-    board_roi, board_box = ws.find_board_roi(state.arr)
-    preview_roi, preview_box = ws.find_preview_roi(state.arr)
-    x0, y0, x1, y1 = board_box
-    draw.rounded_rectangle((x0, y0, x1, y1), radius=18, outline=(255, 209, 102, 255), width=4)
-    px0, py0, px1, py1 = preview_box
-    draw.rounded_rectangle((px0, py0, px1, py1), radius=14, outline=(124, 199, 255, 255), width=3)
-
-    label_font = _font(18)
-    info_font = _font(15)
-    scene_label = f"scene: {state.scene}"
-    draw.rounded_rectangle((14, 14, 210, 58), radius=14, fill=(17, 19, 24, 220))
-    draw.text((26, 24), scene_label, fill=(244, 246, 248, 255), font=label_font)
-    if display_frame is not None:
-        info = f"preview: {display_frame.preview_label}"
-        draw.rounded_rectangle((14, 64, 220, 102), radius=12, fill=(17, 19, 24, 220))
-        draw.text((26, 74), info, fill=(149, 162, 183, 255), font=info_font)
-    return img.convert("RGB")
-
-
-def draw_board_overlay(frame: mc.FrameState) -> tuple[Image.Image, Image.Image, Image.Image]:
-    board_roi, _board_box = ws.find_board_roi(frame.arr)
-    preview_roi, _preview_box = ws.find_preview_roi(frame.arr)
-    board_img = Image.fromarray(board_roi).convert("RGBA")
-    draw = ImageDraw.Draw(board_img, "RGBA")
-    outer_boxes, _grid_meta = ws._board_cell_boxes(board_roi, inset_ratio=0.0)
-    label_font = _font(20)
-    coord_font = _font(12)
-    for row, col, outer_box, _inner_box in outer_boxes:
-        x0, y0, x1, y1 = outer_box
-        token = frame.board[row][col]
-        box_color = (126, 231, 135, 255) if token != ws.TOKEN_OTHER else (255, 107, 107, 255)
-        fill_color = (126, 231, 135, 38) if token != ws.TOKEN_OTHER else (255, 107, 107, 48)
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=12, outline=box_color, fill=fill_color, width=3)
-        draw.text((x0 + 6, y0 + 4), f"{row},{col}", fill=(244, 246, 248, 255), font=coord_font)
-        draw.text((x0 + 6, y1 - 28), str(token), fill=(255, 209, 102, 255), font=label_font)
-    return board_img.convert("RGB"), Image.fromarray(board_roi).convert("RGB"), Image.fromarray(preview_roi).convert("RGB")
+    _ = display_frame
+    return Image.fromarray(state.arr).convert("RGB")
 
 
 @dataclass
 class LiveImages:
     full_raw: bytes = b""
     full_annotated: bytes = b""
-    board_overlay: Optional[bytes] = None
-    board_raw: Optional[bytes] = None
-    preview_raw: Optional[bytes] = None
 
 
 @dataclass
@@ -486,11 +594,14 @@ class LiveTrackerEngine:
         self.settle_threshold = settle_threshold
         self.max_recovery_depth = max_recovery_depth
         self.events: Deque[str] = deque(maxlen=30)
+        self.issue_log: Deque[str] = deque(maxlen=12)
         self.tracked = False
         self.game_index = 1
         self.move_index = 0
         self.last_snapshot: Optional[tuple] = None
         self.last_stable_frame: Optional[mc.FrameState] = None
+        self.last_visible_board_frame: Optional[mc.FrameState] = None
+        self.last_visible_snapshot: Optional[tuple] = None
         self.last_capture_id: Optional[int] = None
         self.stable_state: Optional[mc.FrameState] = None
         self.stable_count = 0
@@ -498,10 +609,17 @@ class LiveTrackerEngine:
         self.message = "Waiting for the first capture."
         self.failure_reasons: List[str] = []
         self.latest_event: Optional[Dict[str, object]] = None
+        self.end_scene_active = False
 
     def _append_event(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         self.events.appendleft(f"[{stamp}] {text}")
+
+    def _remember_issue(self, text: str) -> None:
+        stamp = time.strftime("%H:%M:%S")
+        entry = f"[{stamp}] {text}"
+        if not self.issue_log or self.issue_log[0] != entry:
+            self.issue_log.appendleft(entry)
 
     def _reset_tracking(self, *, new_game: bool = False) -> None:
         self.tracked = False
@@ -516,6 +634,9 @@ class LiveTrackerEngine:
 
     def observe(self, state: mc.ScreenState, window_id: Optional[int], ts_event: float) -> None:
         self.failure_reasons = []
+        if state.scene not in (mc.SCENE_GAME_OVER, mc.SCENE_POSTGAME):
+            self.end_scene_active = False
+
         if state.scene in (mc.SCENE_SCREEN_OFF, mc.SCENE_PHONE_IN_USE):
             self.run_state = "waiting_for_device"
             self.message = f"Waiting for mirrored device: {state.scene}"
@@ -533,19 +654,23 @@ class LiveTrackerEngine:
             return
 
         if state.scene in (mc.SCENE_GAME_OVER, mc.SCENE_POSTGAME):
-            if self.tracked or self.move_index > 0:
-                self._append_event(f"Game {self.game_index} ended after {self.move_index} tracked moves.")
             self.run_state = "game_end"
             self.message = f"Observed {state.scene}."
-            self.latest_event = {
-                "type": "game_end",
-                "game_index": self.game_index,
-                "move_index": self.move_index,
-                "scene": state.scene,
-            }
-            if window_id is not None:
-                self.recorder.record_scene(state, f"{state.scene}_game{self.game_index:03d}_move{self.move_index:04d}")
-            self._reset_tracking(new_game=True)
+            if not self.end_scene_active:
+                if self.tracked or self.move_index > 0:
+                    self._append_event(f"Game {self.game_index} ended after {self.move_index} tracked moves.")
+                self.latest_event = {
+                    "type": "game_end",
+                    "game_index": self.game_index,
+                    "move_index": self.move_index,
+                    "scene": state.scene,
+                }
+                if window_id is not None:
+                    self.recorder.record_scene(
+                        state, f"{state.scene}_game{self.game_index:03d}_move{self.move_index:04d}"
+                    )
+                self.end_scene_active = True
+                self._reset_tracking(new_game=True)
             return
 
         if state.scene != mc.SCENE_GAME or state.frame is None:
@@ -579,6 +704,9 @@ class LiveTrackerEngine:
             return
 
         settled = self.stable_state
+        self.last_visible_board_frame = settled
+        if self.last_snapshot is not None:
+            self.last_visible_snapshot = self.last_snapshot
         if not self.tracked:
             initial_error = ws._initial_state_error(settled.board, settled.preview_label)
             if initial_error is not None and not self.attach_current_game:
@@ -602,7 +730,12 @@ class LiveTrackerEngine:
             self.tracked = True
             self.last_stable_frame = settled
             self.run_state = "tracking"
-            self.message = "Attached to the current game."
+            if self.last_snapshot is None:
+                self.message = (
+                    "Attached mid-game. Exact next-tile probabilities are unavailable until the next fresh game."
+                )
+            else:
+                self.message = "Attached to the current game."
             self._append_event(f"Attached to game {self.game_index} at move {self.move_index}.")
             return
 
@@ -661,6 +794,7 @@ class LiveTrackerEngine:
             self.run_state = "failure"
             self.message = "Invalid tracked state detected. Re-seeding from the current board."
             self._append_event(f"Invalid state at move {self.move_index}: {'; '.join(failure_reasons)}")
+            self._remember_issue(f"Move {self.move_index}: {'; '.join(failure_reasons)}")
             self.tracked = False
             self.last_stable_frame = None
             self.last_snapshot = None
@@ -684,19 +818,111 @@ class LiveTrackerEngine:
         else:
             self._append_event(f"Move {self.move_index}: {direction_text}")
 
+    def _display_frame(self) -> Optional[mc.FrameState]:
+        return self.last_stable_frame or self.last_visible_board_frame
+
+    def _display_snapshot(self) -> Optional[tuple]:
+        return self.last_snapshot or self.last_visible_snapshot
+
+    def _observed_preview_payload(self, frame: Optional[mc.FrameState]) -> Dict[str, object]:
+        if frame is None:
+            return {"label": None, "text": "Unavailable", "note": "No active game preview is visible."}
+        max_tile = ws.board_max_tile(frame.board)
+        label = frame.preview_label
+        if label == "red":
+            return {"label": label, "text": "1", "note": "Observed red cue."}
+        if label == "blue":
+            return {"label": label, "text": "2", "note": "Observed blue cue."}
+        if label == "gray":
+            return {"label": label, "text": "3", "note": "Observed gray cue."}
+        if label == "large_candidates":
+            bonus_values = ws.TileCycle()
+            bonus_values.set_max_tile(max_tile)
+            values = bonus_values.bonus_values()
+            if not values:
+                label_text = "bonus"
+            elif len(values) <= 3:
+                label_text = "/".join(str(v) for v in values)
+            else:
+                label_text = "/".join(str(v) for v in values[:3]) + "/..."
+            return {
+                "label": label,
+                "text": label_text,
+                "note": (
+                    "Observed large-tile preview band."
+                    if not values
+                    else f"Observed large-tile preview band. Candidates: {', '.join(str(v) for v in values)}."
+                ),
+            }
+        return {"label": label, "text": str(label), "note": "Observed preview cue."}
+
+    def _probability_payload(self, frame: Optional[mc.FrameState]) -> Dict[str, object]:
+        if frame is None:
+            return {"available": False, "items": [], "note": "No active game board is visible.", "bonus_values": []}
+        max_tile = ws.board_max_tile(frame.board)
+        cycle = ws.TileCycle()
+        cycle.set_max_tile(max_tile)
+        bonus_values = cycle.bonus_values()
+        if self.last_snapshot is None:
+            note = "Start tracking from a fresh game to compute exact cue odds after the visible tile is spent."
+            return {
+                "available": False,
+                "items": [],
+                "note": note,
+                "bonus_values": bonus_values,
+                "max_tile": max_tile,
+            }
+        cycle.restore(self.last_snapshot)
+        cycle.set_max_tile(max_tile)
+        probs = cycle.probabilities()
+        items = [
+            {"key": "red", "label": "1", "probability": probs.get("red", 0.0)},
+            {"key": "blue", "label": "2", "probability": probs.get("blue", 0.0)},
+            {"key": "gray", "label": "3", "probability": probs.get("gray", 0.0)},
+        ]
+        large_prob = probs.get("large_candidates", 0.0)
+        if large_prob > 0 and bonus_values:
+            per_bonus = large_prob / len(bonus_values)
+            for value in bonus_values:
+                items.append(
+                    {
+                        "key": f"bonus_{value}",
+                        "label": str(value),
+                        "probability": per_bonus,
+                    }
+                )
+        for item in items:
+            item["percent"] = round(item["probability"] * 100.0, 1)
+        bonus_total = round(large_prob * 100.0, 1)
+        note = "These odds are for the cue that should appear after the current visible tile is used."
+        if bonus_values:
+            note += f" Bonus total: {bonus_total:.1f}% across {', '.join(str(v) for v in bonus_values)}."
+        return {
+            "available": True,
+            "items": items,
+            "note": note,
+            "bonus_values": bonus_values,
+            "max_tile": max_tile,
+        }
+
     def payload(self) -> Dict[str, object]:
-        rendered = None
-        if self.last_stable_frame is not None:
-            rendered = render_tracked_board(self.last_stable_frame, self.last_snapshot)
+        frame = self._display_frame()
+        snapshot = self._display_snapshot()
+        rendered = render_tracked_board(frame, snapshot) if frame is not None else None
         latest_event_pretty = json.dumps(self.latest_event, indent=2) if self.latest_event else None
         return {
             "run_state": self.run_state,
             "message": self.message,
             "tracked": self.tracked,
+            "tracking_enabled": self.last_snapshot is not None,
             "game_index": self.game_index,
             "move_index": self.move_index,
             "rendered_board": rendered,
+            "board": frame.board if frame is not None else None,
+            "observed_preview": self._observed_preview_payload(frame),
+            "expected_next": self._probability_payload(frame),
             "failure_reasons": self.failure_reasons,
+            "issue_log": list(self.issue_log),
             "latest_event": self.latest_event,
             "latest_event_pretty": latest_event_pretty,
             "last_capture_id": self.last_capture_id,
@@ -760,12 +986,6 @@ class LiveDebugApp:
         (self.session_dir / "live_status.json").write_text(json.dumps(payload, indent=2))
         (self.session_dir / "live_full.png").write_bytes(images.full_raw)
         (self.session_dir / "live_full_annotated.png").write_bytes(images.full_annotated)
-        if images.board_overlay is not None:
-            (self.session_dir / "live_board_overlay.png").write_bytes(images.board_overlay)
-        if images.board_raw is not None:
-            (self.session_dir / "live_board.png").write_bytes(images.board_raw)
-        if images.preview_raw is not None:
-            (self.session_dir / "live_preview.png").write_bytes(images.preview_raw)
 
     def _publish(self, payload: Dict[str, object], images: LiveImages) -> None:
         runtime = {
@@ -799,12 +1019,6 @@ class LiveDebugApp:
                 return images.full_raw
             if name == "full_annotated.png":
                 return images.full_annotated
-            if name == "board_overlay.png":
-                return images.board_overlay
-            if name == "board.png":
-                return images.board_raw
-            if name == "preview.png":
-                return images.preview_raw
         return None
 
     def capture_loop(self) -> None:
@@ -817,37 +1031,38 @@ class LiveDebugApp:
                 assert self.tracker is not None
                 state = mc.capture_screen_state(self.window_id, self.args.capture_backend)
                 self.tracker.observe(state, self.window_id, time.time())
-                display_frame = state.frame or state.candidate_frame
 
                 images = LiveImages()
                 raw_image = Image.fromarray(state.arr).convert("RGB")
                 images.full_raw = _png_bytes(raw_image)
-                images.full_annotated = _png_bytes(draw_full_annotated(state, display_frame))
-                if state.frame is not None:
-                    board_overlay, board_raw, preview_raw = draw_board_overlay(state.frame)
-                    images.board_overlay = _png_bytes(board_overlay)
-                    images.board_raw = _png_bytes(board_raw)
-                    images.preview_raw = _png_bytes(preview_raw)
+                images.full_annotated = _png_bytes(draw_full_annotated(state, state.frame))
 
-                detected_board = display_frame.board if display_frame is not None else None
-                detected_preview = display_frame.preview_label if display_frame is not None else None
+                detected_board = state.frame.board if state.frame is not None else None
+                detected_preview = state.frame.preview_label if state.frame is not None else None
                 detected_rendered = (
-                    ws.format_board_with_preview(display_frame.board, display_frame.preview_label)
-                    if display_frame is not None
+                    ws.format_board_with_preview(state.frame.board, state.frame.preview_label)
+                    if state.frame is not None
                     else None
                 )
                 issues: List[str] = []
-                if display_frame is not None and ws._board_has_unknowns(display_frame.board):
+                if state.frame is not None and ws._board_has_unknowns(state.frame.board):
                     issues.append("Detected board contains unknown cells.")
-                if display_frame is not None and display_frame.preview_label == "unknown":
+                if state.frame is not None and state.frame.preview_label == "unknown":
                     issues.append("Detected preview is unknown.")
-                if self.tracker.failure_reasons:
-                    issues.extend(self.tracker.failure_reasons)
+                tracker_payload = self.tracker.payload()
+                issues.extend(tracker_payload.get("issue_log", []))
+                issues.extend(self.tracker.failure_reasons)
                 if self.last_error:
                     issues.append(self.last_error)
+                deduped_issues: List[str] = []
+                seen_issues = set()
+                for issue in issues:
+                    if not issue or issue in seen_issues:
+                        continue
+                    deduped_issues.append(issue)
+                    seen_issues.add(issue)
 
                 elapsed_ms = int((time.perf_counter() - loop_start) * 1000)
-                tracker_payload = self.tracker.payload()
                 payload = {
                     "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "captured_at_ms": captured_at_ms,
@@ -866,14 +1081,11 @@ class LiveDebugApp:
                         "message": "No live board classification for the current scene." if detected_board is None else "",
                     },
                     "tracker": tracker_payload,
-                    "issues": issues,
+                    "issues": deduped_issues,
                     "recent_events": list(self.recent_events) + self.tracker.recent_events(),
                     "images": {
                         "full": "/frame/full.png",
                         "full_annotated": "/frame/full_annotated.png",
-                        "board_overlay": "/frame/board_overlay.png" if images.board_overlay else None,
-                        "board": "/frame/board.png" if images.board_raw else None,
-                        "preview": "/frame/preview.png" if images.preview_raw else None,
                     },
                 }
                 self._publish(payload, images)
@@ -915,9 +1127,6 @@ class LiveDebugApp:
                     "images": {
                         "full": "/frame/full.png",
                         "full_annotated": "/frame/full_annotated.png",
-                        "board_overlay": None,
-                        "board": None,
-                        "preview": None,
                     },
                 }
                 self._publish(payload, LiveImages())

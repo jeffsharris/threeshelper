@@ -100,9 +100,9 @@ def classify_roi(roi: np.ndarray) -> Tuple[str, Dict]:
         debug["y_std_norm"] = float(y_std_norm)
 
         is_large = (
-            len(coords) > 500
-            and y_std_norm < 0.11
-            and x_std_norm > 0.12
+            len(coords) > 300
+            and y_std_norm < 0.06
+            and x_std_norm > 0.14
         )
         if is_large:
             return "large_candidates", debug

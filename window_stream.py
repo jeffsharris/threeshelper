@@ -91,17 +91,21 @@ class TileCycle:
 
     def probabilities(self) -> Dict[str, float]:
         """
-        Return probabilities for next preview:
-        - red/blue/gray follow the remaining 12-tile bag.
-        - large_candidates becomes possible with fixed 1/21 probability once a 48-tile exists.
+        Return probabilities for the next preview label.
+
+        Once bonus tiles are enabled, the game shows the bonus band with a fixed
+        probability and otherwise falls back to the small-tile bag. The returned
+        probabilities therefore sum to 1.0.
         """
         small_slots_left = max(1, SMALL_BAG_SIZE - self.small_pos)
+        large_prob = self.large_probability()
+        small_scale = max(0.0, 1.0 - large_prob)
 
         probs: Dict[str, float] = {}
         for color, remaining in self.small_counts.items():
-            probs[color] = remaining / small_slots_left
+            probs[color] = (remaining / small_slots_left) * small_scale
 
-        probs["large_candidates"] = self.large_probability()
+        probs["large_candidates"] = large_prob
         return probs
 
     def large_probability(self) -> float:
