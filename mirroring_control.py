@@ -44,7 +44,7 @@ SCENE_MATCH_THRESHOLD = {
     SCENE_POSTGAME: 0.005,
     SCENE_MENU: 0.02,
     SCENE_END_CONFIRM: 0.02,
-    SCENE_PHONE_IN_USE: 0.02,
+    SCENE_PHONE_IN_USE: 0.03,
 }
 DARK_FRAME_MEAN_THRESHOLD = 3.0
 DARK_FRAME_MAX_THRESHOLD = 12.0
@@ -235,6 +235,15 @@ SPECIAL_SCENE_MATCHERS = {
             "size": (64, 28),
             "refs": (
                 SCENE_REF_DIR / "postgame_summary_top.png",
+            ),
+        },
+    ),
+    SCENE_PHONE_IN_USE: (
+        {
+            "box": (0.22, 0.30, 0.78, 0.78),
+            "size": (64, 64),
+            "refs": (
+                SCENE_REF_DIR / "phone_in_use_center.png",
             ),
         },
     ),

@@ -1,45 +1,54 @@
-Project: Threes helper – live preview tracker
-=============================================
+Project: Threes helper – mirrored-device state tracker
+======================================================
 
 Purpose
-- Mac helper that watches the mirrored iPhone Threes window, detects the “next” tile preview (red/blue/gray or large-candidate band), and maintains 12-tile (4/4/4) and 24-tile (one large) state to display odds.
+- Observe and drive Threes through macOS `iPhone Mirroring`.
+- Detect the live board and preview tile.
+- Track the small-tile bag (4 red / 4 blue / 4 gray per 12 non-bonus tiles).
+- Track bonus-tile eligibility from the visible board state.
+- Record enough artifacts to debug any invalid internal state.
 
-Current files (in repo root)
-- preview_detector.py: image/array/PIL detector. Outputs {red, blue, gray, large_candidates}. Finds preview crop via saturation near upper center. Exposes classify_array / classify_pil / classify_image.
-- preview_detector.py also exposes board ROI helpers: find_board_roi, board_signature (low-res quantized fingerprint), board_signature_diff.
-- window_stream.py: default mode listens to arrow keys (Quartz event tap) and captures on each press; shows remaining small tiles as colored squares (🟥/🟦/⬜️) plus `P(large)=x%`. Hotkeys: Z undo last move, Q reset to a fresh game (immediate capture seeds the new cycle). Small pool: 4/4/4 resetting every 12 non-large tiles; large pool: 1 per 24 small tiles (inserted in addition). Optional polling mode with `--poll` still available; board change threshold tunable via --board-delta-threshold (default 0.3). Arrow capture delay defaults to 0.3s (`--arrow-delay`). Auto-selects the first window whose title starts with `iPhone Mirroring` (override with --auto-window-prefix). Frontmost fallback if enumeration fails; if auto-pick fails it will list windows for manual selection, then fallback to frontmost. `--board-once` snapshots the 4x4 board + preview (🟥/🟦, blanks=`·`, gray/others=`X`); `--dump-tiles <dir>` writes the 16 cell crops + preview for segmentation debugging.
-- README.md: usage, permissions, and run commands.
-- Screenshots currently present: 'Screenshot 1.png', 'Screenshot 2.png', 'Screenshot 3.png', 'Screenshot 4.png'. (Earlier files with “Screenshot 2025-11-19 at 4.12.xx PM.png” existed; if needed, ensure sample images are available for classification tests.)
+Current structure
+- `preview_detector.py`
+  - Preview detector and board ROI helpers.
+  - Uses a fixed relative board crop; the older saturation-based board crop is gone.
+- `window_stream.py`
+  - Core board/preview classification logic.
+  - Owns the tile-cycle model, bonus-tile rules, board rendering, and dataset recorder.
+- `mirroring_control.py`
+  - Native macOS driver for the `iPhone Mirroring` window.
+  - Scene-aware across `title`, `game`, `game_over`, `postgame`, `menu`, `end_confirm`, `phone_in_use`, and `screen_off`.
+  - Handles `game_over -> swipe to summary -> Retry -> new game`.
+- `state_hunt.py`
+  - Shared transition validator and artifact recorder used by both autonomous and observe-only workflows.
+- `hunt_invalid_states.py`
+  - Repeated self-play harness. Stops on the first invalid tracked state and saves rewindable artifacts.
+- `observe_human_game.py`
+  - Observe-only harness for user-driven play. Waits for a fresh board by default, validates settled moves, and saves artifacts on failure.
+- `scene_refs/`
+  - Cropped reference images for the mirrored end-of-game scenes that are hard to classify from low-res fingerprints alone.
 
-Dependencies / permissions
-- Python libs: Pillow, numpy present. Install Quartz bindings for best results: `python -m pip install pyobjc-framework-Quartz` (use your Python path, e.g., /opt/homebrew/anaconda3/bin/python).
-- macOS permissions: Screen Recording (for screencapture) and Accessibility (for AppleScript fallback).
+Game-model assumptions in code
+- Small-tile bag
+  - Exactly 4 red, 4 blue, and 4 gray previews per 12 non-bonus inserts.
+  - The bag resets after every 12 non-bonus inserts.
+- Bonus tiles
+  - Bonus tiles are only eligible once a 48 tile is visible on the board.
+  - Candidate bonus values are derived from the current board max.
+  - Bonus probability is modeled independently from the small bag.
+- Tracking bootstrap
+  - Fresh-game tracking is only seeded from a valid initial board.
+  - If the current visible board is not a valid fresh start, tracking is disabled instead of inventing state.
 
-How to run now
-- Screenshot test:
-  python3 - <<'PY'
-  import glob, subprocess
-  for path in glob.glob('Screenshot*PM.png'):
-      print(f'=== {path}')
-      subprocess.run(['python3','preview_detector.py','--image',path,'--debug'], check=False)
-  PY
-- Live polling (pick a window):
-  python3 window_stream.py --poll-seconds 0.4
-  - Choose the Threes/iPhone-mirroring window from the numbered list.
-  - Add --print-all to log every poll.
-  - If “No windows found,” press Enter, then click/focus Threes within 3 seconds; it will grab the frontmost window.
-  - If Quartz is missing, install pyobjc-framework-Quartz; otherwise it falls back to System Events (may fail for iPhone Mirroring).
+Operational notes
+- Generated debugging artifacts live under:
+  - `datasets/state_hunt/`
+  - `datasets/human_watch/`
+- Temporary crops and dumped tiles are ignored by `.gitignore`.
+- The clean validation baseline for the current driver is:
+  - `python3 hunt_invalid_states.py --games 5 --start-from-title --move-order cycle`
+  - This completed without a tracked invalid state after the latest scene/bootstrap fixes.
 
-Recent blocker and mitigation
-- AppleScript/System Events often fails to get window id for “iPhone Mirroring” (-1728). Mitigation: use Quartz enumeration/capture via pyobjc-framework-Quartz. Frontmost fallback remains but relies on System Events if Quartz is missing.
-
-Game logic assumptions (for upcoming state engine)
-- Each 12-tile span: exactly 4 red, 4 blue, 4 gray; reset after 12.
-- Each 24-tile span: exactly one large tile randomly placed; may appear adjacent across spans.
-- Start tracking at game start (tile 1). Preview shows next small tile color or large band (three options); we only need color vs large-band flag.
-
-Next milestones
-1) Move/change detection: detect board change or hook a hotkey to trigger capture instead of fixed polling.
-2) State engine: track 12-tile counts (4/4/4), auto-reset every 12; track 24-span with one large; P(large next) = 1/(remaining slots).
-3) Minimal HUD: show remaining counts, tile index in 12-span, tiles since last large, P(large next), last detected preview.
-4) Polish: reselect/reset window, logging misreads, threshold tuning on live feed; consider region select fallback if window id capture remains flaky.
+Immediate next use
+1. Run `observe_human_game.py` and let a human play deeper into the game while the validator watches for the first invalid state.
+2. After confidence is high enough, iterate on stronger self-play strategy on top of the now-stable driver and validator.

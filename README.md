@@ -4,7 +4,10 @@ Threes helper – preview detector
 What’s here
 -----------
 - `preview_detector.py`: screenshot-based detector for the “next tile” preview.
-- `window_stream.py`: polls a macOS window and prints detected preview labels.
+- `window_stream.py`: capture/classification core for live mirrored gameplay.
+- `mirroring_control.py`: direct iPhone Mirroring input driver and scene routing.
+- `hunt_invalid_states.py`: repeated self-play harness that records artifacts and stops on the first invalid tracked state.
+- `observe_human_game.py`: observe-only harness for user-driven play that validates each settled move without sending input.
 - Uses Pillow + NumPy (already present in this environment).
 
 How static detection works
@@ -107,6 +110,23 @@ Abort an in-progress game back to the title screen:
 python3 mirroring_control.py --exit-game
 ```
 
+Observation and state hunts
+---------------------------
+Watch a human-played game from the next fresh board and stop on the first invalid state:
+```bash
+python3 observe_human_game.py
+```
+
+Attach to whatever game is currently visible, even if it is already mid-game:
+```bash
+python3 observe_human_game.py --attach-current-game
+```
+
+Run repeated self-play and stop on the first tracked invalid state:
+```bash
+python3 hunt_invalid_states.py --games 5 --start-from-title --move-order cycle
+```
+
 Useful notes:
 - Works against the live `iPhone Mirroring` window; the game does not need to exist as a local app target.
 - The driver now distinguishes `title`, `game`, `game_over`, `postgame`, `menu`, and `end_confirm` scenes before deciding which transition routine to run.
@@ -116,6 +136,8 @@ Useful notes:
 - `--exit-game` follows the full abort path: `menu -> MAIN MENU -> END GAME -> title`.
 - `--tap-rel X Y` sends a single tap at relative window coordinates, which is intended for future game-over/new-game flows.
 - `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.
+- `observe_human_game.py` waits for a real fresh board by default, then validates each settled move and records rewindable artifacts in `datasets/human_watch/`.
+- `hunt_invalid_states.py` uses the same validator and artifact format for autonomous repeated-play runs in `datasets/state_hunt/`.
 
 Gray tile labeling (build 3+ dataset):
 ```bash
@@ -176,7 +198,7 @@ Fallback if no windows are listed
 ---------------------------------
 If the chooser prints “No windows found”, macOS did not expose windows via System Events (usually an Accessibility permission issue). The script will then ask you to press Enter and, within 3 seconds, click/focus the Threes window; it will capture the frontmost window after that delay.
 
-Next milestones
----------------
-- Improve move/change detection (board diff or hotkey) to avoid fixed polling costs.
-- Add the 12/24 counting engine and a minimal HUD.
+Next phase
+----------
+- Run longer human-observed play sessions to catch deeper invalid states with full artifacts.
+- Extend self-play beyond the current move-order search into strategy iteration and evaluation.
