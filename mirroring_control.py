@@ -17,8 +17,155 @@ import window_stream as ws
 
 APP_BUNDLE_ID = "com.apple.ScreenContinuity"
 DIRECTIONS = ("up", "down", "left", "right")
+SCENE_GAME = "game"
+SCENE_TITLE = "title"
+SCENE_POSTGAME = "postgame"
+SCENE_MENU = "menu"
+SCENE_END_CONFIRM = "end_confirm"
 TITLE_PLAY_TAP = (0.50, 0.78)
 POSTGAME_RETRY_TAP = (0.16, 0.145)
+INGAME_MENU_TAP = (0.16, 0.15)
+MENU_MAIN_MENU_TAP = (0.50, 0.75)
+END_CONFIRM_END_GAME_TAP = (0.50, 0.56)
+SCENE_MATCH_THRESHOLD = {
+    SCENE_TITLE: 0.01,
+    SCENE_POSTGAME: 0.02,
+    SCENE_MENU: 0.02,
+    SCENE_END_CONFIRM: 0.02,
+}
+
+
+def _ref_signature(values: Sequence[int]) -> np.ndarray:
+    return np.array(values, dtype=np.float32).reshape((6, 6, 3)) / 255.0
+
+
+SCENE_FINGERPRINTS = {
+    SCENE_TITLE: {
+        "play": {
+            "box": (0.10, 0.70, 0.90, 0.84),
+            "ref": _ref_signature(
+                (
+                    40, 39, 50, 40, 39, 50, 40, 39, 50, 40, 39, 50, 40, 39, 50, 40,
+                    39, 50, 40, 39, 50, 40, 39, 50, 40, 39, 50, 40, 39, 50, 40, 39,
+                    50, 40, 39, 50, 43, 42, 55, 43, 42, 55, 43, 42, 55, 43, 42, 55,
+                    43, 42, 55, 43, 42, 55, 78, 77, 99, 81, 81, 102, 81, 80, 102, 88,
+                    88, 108, 89, 88, 109, 76, 76, 98, 116, 116, 135, 140, 140, 156,
+                    114, 114, 133, 152, 152, 166, 149, 149, 164, 114, 114, 133, 69,
+                    68, 91, 77, 77, 98, 68, 68, 90, 76, 76, 97, 81, 81, 101, 73, 73,
+                    94,
+                )
+            ),
+        },
+        "hero": {
+            "box": (0.14, 0.26, 0.86, 0.63),
+            "ref": _ref_signature(
+                (
+                    42, 41, 52, 41, 40, 51, 42, 41, 52, 41, 41, 52, 41, 40, 51, 42,
+                    41, 52, 108, 111, 119, 86, 89, 102, 89, 94, 107, 87, 90, 104, 82,
+                    85, 98, 88, 93, 106, 127, 134, 142, 98, 105, 118, 101, 109, 124,
+                    96, 104, 119, 88, 97, 111, 88, 101, 117, 100, 108, 123, 90, 96,
+                    110, 95, 103, 118, 86, 99, 115, 79, 95, 111, 80, 100, 117, 95,
+                    106, 122, 85, 94, 109, 88, 98, 113, 96, 108, 124, 84, 100, 116,
+                    84, 104, 122, 96, 107, 122, 85, 100, 117, 95, 104, 118, 99, 106,
+                    120, 89, 108, 126, 75, 99, 118,
+                )
+            ),
+        },
+    },
+    SCENE_POSTGAME: {
+        "retry": {
+            "box": (0.04, 0.08, 0.25, 0.20),
+            "ref": _ref_signature(
+                (
+                    39, 38, 48, 40, 39, 49, 56, 55, 64, 82, 81, 90, 87, 86, 95, 87,
+                    86, 94, 40, 39, 49, 40, 39, 49, 41, 40, 50, 42, 41, 51, 42, 41,
+                    51, 42, 41, 51, 40, 39, 49, 40, 39, 49, 40, 39, 49, 40, 39, 49,
+                    40, 39, 49, 40, 39, 49, 40, 39, 49, 40, 39, 49, 40, 39, 49, 40,
+                    39, 49, 40, 39, 49, 40, 39, 49, 40, 39, 49, 42, 41, 52, 45, 44,
+                    57, 50, 50, 62, 47, 46, 60, 45, 44, 57, 40, 39, 49, 48, 48, 63,
+                    64, 64, 88, 130, 130, 146, 120, 119, 137, 65, 64, 89,
+                )
+            ),
+        },
+        "summary": {
+            "box": (0.17, 0.23, 0.83, 0.66),
+            "ref": _ref_signature(
+                (
+                    41, 40, 50, 41, 40, 50, 46, 45, 56, 45, 45, 55, 41, 40, 50, 42,
+                    41, 51, 54, 54, 65, 72, 74, 84, 70, 72, 84, 70, 72, 84, 70, 72,
+                    84, 54, 54, 65, 87, 88, 97, 140, 143, 149, 122, 128, 144, 122,
+                    128, 144, 123, 129, 145, 83, 86, 99, 79, 82, 95, 122, 125, 141,
+                    132, 124, 140, 132, 123, 140, 133, 125, 141, 87, 84, 97, 79, 82,
+                    95, 133, 119, 136, 192, 108, 128, 197, 105, 123, 197, 105, 123,
+                    113, 75, 89, 81, 84, 97, 121, 134, 155, 122, 155, 192, 135, 125,
+                    144, 140, 123, 140, 90, 83, 97,
+                )
+            ),
+        },
+    },
+    SCENE_MENU: {
+        "main_menu": {
+            "box": (0.08, 0.68, 0.92, 0.82),
+            "ref": _ref_signature(
+                (
+                    42, 39, 51, 42, 40, 51, 42, 40, 51, 42, 40, 51, 42, 40, 51, 42,
+                    39, 51, 159, 73, 91, 170, 79, 97, 170, 79, 97, 170, 80, 98, 170,
+                    80, 98, 161, 73, 91, 236, 114, 134, 253, 163, 177, 253, 155, 170,
+                    253, 163, 177, 253, 161, 176, 239, 109, 130, 231, 99, 122, 248,
+                    127, 147, 247, 122, 143, 248, 124, 145, 248, 128, 148, 234, 100,
+                    123, 148, 60, 92, 158, 62, 96, 158, 62, 96, 158, 62, 96, 158, 62,
+                    96, 150, 61, 93, 46, 40, 53, 47, 40, 53, 47, 40, 53, 47, 40, 53,
+                    47, 40, 53, 46, 40, 53,
+                )
+            ),
+        },
+        "options": {
+            "box": (0.05, 0.28, 0.95, 0.60),
+            "ref": _ref_signature(
+                (
+                    44, 43, 55, 45, 44, 56, 44, 44, 55, 40, 39, 50, 40, 39, 50, 40,
+                    39, 50, 50, 49, 61, 50, 50, 62, 47, 47, 58, 39, 38, 49, 43, 42,
+                    54, 48, 47, 60, 49, 48, 60, 44, 43, 54, 36, 35, 45, 36, 35, 45,
+                    48, 47, 60, 61, 60, 76, 47, 46, 58, 43, 42, 53, 41, 41, 51, 36,
+                    35, 45, 49, 49, 61, 66, 65, 81, 54, 45, 58, 44, 42, 53, 41, 40,
+                    51, 37, 36, 46, 64, 47, 59, 94, 61, 75, 77, 52, 64, 50, 46, 57,
+                    42, 41, 51, 36, 35, 45, 92, 53, 67, 150, 73, 93,
+                )
+            ),
+        },
+    },
+    SCENE_END_CONFIRM: {
+        "end_game": {
+            "box": (0.08, 0.48, 0.92, 0.62),
+            "ref": _ref_signature(
+                (
+                    40, 39, 50, 40, 39, 50, 40, 39, 50, 40, 39, 50, 40, 39, 50, 40,
+                    39, 50, 41, 39, 50, 41, 39, 50, 41, 39, 50, 41, 39, 50, 41, 39,
+                    50, 41, 39, 50, 151, 70, 88, 161, 76, 94, 161, 75, 93, 161, 76,
+                    94, 161, 76, 94, 153, 70, 88, 235, 100, 121, 253, 152, 168, 253,
+                    147, 163, 253, 157, 172, 253, 154, 169, 238, 98, 121, 232, 95,
+                    118, 249, 127, 147, 249, 125, 146, 249, 133, 152, 249, 126, 146,
+                    235, 95, 119, 171, 65, 101, 182, 68, 105, 182, 68, 105, 182, 68,
+                    105, 182, 68, 105, 173, 66, 101,
+                )
+            ),
+        },
+        "caution": {
+            "box": (0.10, 0.30, 0.85, 0.46),
+            "ref": _ref_signature(
+                (
+                    38, 36, 47, 37, 36, 47, 37, 36, 47, 37, 36, 47, 37, 36, 47, 37,
+                    36, 47, 35, 33, 43, 35, 34, 43, 36, 35, 45, 37, 36, 46, 35, 34,
+                    43, 35, 34, 43, 36, 35, 44, 37, 37, 46, 48, 48, 58, 54, 55, 65,
+                    39, 38, 47, 36, 36, 45, 43, 42, 52, 54, 54, 65, 55, 56, 67, 56,
+                    57, 67, 56, 57, 68, 49, 49, 59, 35, 34, 43, 46, 46, 56, 53, 53,
+                    63, 55, 55, 66, 53, 53, 64, 38, 37, 47, 36, 35, 44, 37, 36, 45,
+                    37, 36, 45, 37, 36, 45, 37, 36, 45, 36, 35, 44,
+                )
+            ),
+        },
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +186,24 @@ class FrameState:
     preview_label: str
     preview_debug: Dict[str, object]
     board_sig: np.ndarray
+
+
+@dataclass
+class ScreenState:
+    arr: np.ndarray
+    scene: str
+    scene_score: float
+    scene_scores: Dict[str, float]
+    frame: Optional[FrameState] = None
+
+
+@dataclass
+class MoveResult:
+    direction: str
+    changed: bool
+    scene: str
+    board_delta: Optional[float]
+    game_over: bool = False
 
 
 def activate_mirroring() -> None:
@@ -102,6 +267,41 @@ def capture_window_image(window_id: int, backend: str) -> Image.Image:
             pass
 
 
+def _crop_from_rel_box(arr: np.ndarray, box: Tuple[float, float, float, float]) -> Image.Image:
+    h, w = arr.shape[:2]
+    x0 = max(0, int(w * box[0]))
+    y0 = max(0, int(h * box[1]))
+    x1 = min(w, int(w * box[2]))
+    y1 = min(h, int(h * box[3]))
+    return Image.fromarray(arr[y0:y1, x0:x1]).convert("RGB")
+
+
+def _crop_signature(arr: np.ndarray, box: Tuple[float, float, float, float]) -> np.ndarray:
+    crop = _crop_from_rel_box(arr, box)
+    small = crop.resize((6, 6), Image.Resampling.BILINEAR)
+    return np.array(small, dtype=np.float32) / 255.0
+
+
+def _scene_match_scores(arr: np.ndarray) -> Dict[str, float]:
+    scores: Dict[str, float] = {}
+    for scene, refs in SCENE_FINGERPRINTS.items():
+        total = 0.0
+        for ref in refs.values():
+            sig = _crop_signature(arr, ref["box"])
+            total += float(((sig - ref["ref"]) ** 2).mean())
+        scores[scene] = total
+    return scores
+
+
+def detect_scene(arr: np.ndarray) -> Tuple[str, float, Dict[str, float]]:
+    scores = _scene_match_scores(arr)
+    best_scene, best_score = min(scores.items(), key=lambda item: item[1])
+    threshold = SCENE_MATCH_THRESHOLD.get(best_scene, 0.0)
+    if best_score <= threshold:
+        return best_scene, best_score, scores
+    return SCENE_GAME, best_score, scores
+
+
 def capture_frame(window_id: int, backend: str) -> FrameState:
     arr = np.array(capture_window_image(window_id, backend))
     board = ws.classify_board(arr)
@@ -113,6 +313,49 @@ def capture_frame(window_id: int, backend: str) -> FrameState:
         preview_label=preview_label,
         preview_debug=preview_debug,
         board_sig=board_sig,
+    )
+
+
+def capture_screen_state(window_id: int, backend: str) -> ScreenState:
+    arr = np.array(capture_window_image(window_id, backend))
+    scene, score, scores = detect_scene(arr)
+    frame = None
+    if scene == SCENE_GAME:
+        board = ws.classify_board(arr)
+        preview_label, preview_debug = ws.classify_array(arr)
+        board_sig, _ = ws.board_signature(arr)
+        frame = FrameState(
+            arr=arr,
+            board=board,
+            preview_label=preview_label,
+            preview_debug=preview_debug,
+            board_sig=board_sig,
+        )
+    return ScreenState(
+        arr=arr,
+        scene=scene,
+        scene_score=score,
+        scene_scores=scores,
+        frame=frame,
+    )
+
+
+def wait_for_scene(
+    window_id: int,
+    backend: str,
+    expected_scenes: Sequence[str],
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    deadline = time.time() + timeout
+    last_state = capture_screen_state(window_id, backend)
+    while time.time() < deadline:
+        if last_state.scene in expected_scenes:
+            return last_state
+        time.sleep(poll)
+        last_state = capture_screen_state(window_id, backend)
+    raise RuntimeError(
+        f"Timed out waiting for scene {list(expected_scenes)!r}; last scene was {last_state.scene!r}"
     )
 
 
@@ -149,6 +392,167 @@ def start_game_from_title(window_id: int, focus_delay: float) -> None:
 
 def retry_from_postgame(window_id: int, focus_delay: float) -> None:
     tap_window(window_id, POSTGAME_RETRY_TAP[0], POSTGAME_RETRY_TAP[1], focus_delay)
+
+
+def open_menu_from_game(window_id: int, focus_delay: float) -> None:
+    tap_window(window_id, INGAME_MENU_TAP[0], INGAME_MENU_TAP[1], focus_delay)
+
+
+def tap_main_menu(window_id: int, focus_delay: float) -> None:
+    tap_window(window_id, MENU_MAIN_MENU_TAP[0], MENU_MAIN_MENU_TAP[1], focus_delay)
+
+
+def confirm_end_game(window_id: int, focus_delay: float) -> None:
+    tap_window(window_id, END_CONFIRM_END_GAME_TAP[0], END_CONFIRM_END_GAME_TAP[1], focus_delay)
+
+
+def start_game_sequence(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    state = capture_screen_state(window_id, backend)
+    if state.scene == SCENE_GAME:
+        return state
+    if state.scene != SCENE_TITLE:
+        raise RuntimeError(f"Expected title screen before start_game; got {state.scene!r}")
+    start_game_from_title(window_id, focus_delay)
+    time.sleep(transition_delay)
+    return wait_for_scene(window_id, backend, [SCENE_GAME], timeout=timeout, poll=poll)
+
+
+def retry_game_sequence(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    state = capture_screen_state(window_id, backend)
+    if state.scene == SCENE_GAME:
+        return state
+    if state.scene != SCENE_POSTGAME:
+        raise RuntimeError(f"Expected post-game screen before retry_game; got {state.scene!r}")
+    retry_from_postgame(window_id, focus_delay)
+    time.sleep(transition_delay)
+    return wait_for_scene(window_id, backend, [SCENE_GAME], timeout=timeout, poll=poll)
+
+
+def exit_current_game_sequence(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    state = capture_screen_state(window_id, backend)
+    if state.scene == SCENE_TITLE:
+        return state
+    if state.scene == SCENE_POSTGAME:
+        raise RuntimeError("exit_current_game_sequence expects an active game/menu/confirm screen")
+    if state.scene == SCENE_GAME:
+        open_menu_from_game(window_id, focus_delay)
+        time.sleep(transition_delay)
+        state = wait_for_scene(window_id, backend, [SCENE_MENU], timeout=timeout, poll=poll)
+    if state.scene == SCENE_MENU:
+        tap_main_menu(window_id, focus_delay)
+        time.sleep(transition_delay)
+        state = wait_for_scene(window_id, backend, [SCENE_END_CONFIRM], timeout=timeout, poll=poll)
+    if state.scene == SCENE_END_CONFIRM:
+        confirm_end_game(window_id, focus_delay)
+        time.sleep(transition_delay)
+        state = wait_for_scene(window_id, backend, [SCENE_TITLE], timeout=timeout, poll=poll)
+    if state.scene != SCENE_TITLE:
+        raise RuntimeError(f"Could not exit to title; ended on scene {state.scene!r}")
+    return state
+
+
+def ensure_title_scene(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    state = capture_screen_state(window_id, backend)
+    if state.scene == SCENE_TITLE:
+        return state
+    if state.scene in (SCENE_GAME, SCENE_MENU, SCENE_END_CONFIRM):
+        return exit_current_game_sequence(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+    if state.scene == SCENE_POSTGAME:
+        retry_from_postgame(window_id, focus_delay)
+        time.sleep(transition_delay)
+        return exit_current_game_sequence(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+    raise RuntimeError(f"Cannot ensure title from scene {state.scene!r}")
+
+
+def ensure_game_scene(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    state = capture_screen_state(window_id, backend)
+    if state.scene == SCENE_GAME:
+        return state
+    if state.scene == SCENE_TITLE:
+        return start_game_sequence(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+    if state.scene == SCENE_POSTGAME:
+        return retry_game_sequence(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+    if state.scene in (SCENE_MENU, SCENE_END_CONFIRM):
+        ensure_title_scene(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+        return start_game_sequence(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+    raise RuntimeError(f"Cannot ensure game from scene {state.scene!r}")
 
 
 def drag_window(
@@ -230,7 +634,7 @@ class AutoPlayer:
         self.recorder = recorder
 
         self.tile_cycle: Optional[ws.TileCycle] = None
-        self.current_frame: Optional[FrameState] = None
+        self.current_state: Optional[ScreenState] = None
 
     def _render_state(self, frame: FrameState) -> str:
         if self.tile_cycle is None:
@@ -238,7 +642,10 @@ class AutoPlayer:
         return ws.render_move_table(frame.board, frame.preview_label, self.tile_cycle)
 
     def initialize(self) -> FrameState:
-        frame = capture_frame(self.window_id, self.backend)
+        state = capture_screen_state(self.window_id, self.backend)
+        if state.scene != SCENE_GAME or state.frame is None:
+            raise RuntimeError(f"Expected in-game screen at initialize; got {state.scene!r}")
+        frame = state.frame
         err = ws._initial_state_error(frame.board, frame.preview_label)
         if err is None:
             self.tile_cycle = ws.TileCycle()
@@ -250,32 +657,53 @@ class AutoPlayer:
         else:
             self.tile_cycle = None
             print(f"tracking disabled: {err}")
-        self.current_frame = frame
+        self.current_state = state
         print(self._render_state(frame))
         print()
         return frame
 
-    def _capture_after_settle(self) -> FrameState:
-        frame = capture_frame(self.window_id, self.backend)
+    def _capture_after_settle(self) -> ScreenState:
+        state = capture_screen_state(self.window_id, self.backend)
         if self.settle_frames <= 0:
-            return frame
-        prev_sig = frame.board_sig
-        last_frame = frame
+            return state
+
+        if state.scene != SCENE_GAME or state.frame is None:
+            stable_scene = state.scene
+            stable = 1
+            last_state = state
+            start = time.time()
+            while time.time() - start < self.settle_timeout:
+                time.sleep(self.settle_poll)
+                current = capture_screen_state(self.window_id, self.backend)
+                last_state = current
+                if current.scene == stable_scene:
+                    stable += 1
+                else:
+                    stable_scene = current.scene
+                    stable = 1
+                if stable >= self.settle_frames:
+                    return current
+            return last_state
+
+        prev_sig = state.frame.board_sig
+        last_state = state
         stable = 0
         start = time.time()
         while time.time() - start < self.settle_timeout:
             time.sleep(self.settle_poll)
-            current = capture_frame(self.window_id, self.backend)
-            diff = ws.board_signature_diff(prev_sig, current.board_sig)
-            prev_sig = current.board_sig
-            last_frame = current
+            current = capture_screen_state(self.window_id, self.backend)
+            last_state = current
+            if current.scene != SCENE_GAME or current.frame is None:
+                return current
+            diff = ws.board_signature_diff(prev_sig, current.frame.board_sig)
+            prev_sig = current.frame.board_sig
             if diff < self.settle_threshold:
                 stable += 1
             else:
                 stable = 0
             if stable >= self.settle_frames:
-                return last_frame
-        return last_frame
+                return current
+        return last_state
 
     def _record(self, frame: FrameState, ts_event: float) -> None:
         if not self.recorder:
@@ -289,11 +717,11 @@ class AutoPlayer:
             ts_event,
         )
 
-    def attempt_move(self, direction: str) -> bool:
-        if self.current_frame is None:
+    def attempt_move(self, direction: str) -> MoveResult:
+        if self.current_state is None or self.current_state.scene != SCENE_GAME or self.current_state.frame is None:
             raise RuntimeError("AutoPlayer must be initialized before moves")
 
-        before = self.current_frame
+        before = self.current_state.frame
         drag_window(
             self.window_id,
             direction,
@@ -304,16 +732,44 @@ class AutoPlayer:
             start_rel_y=self.start_rel_y,
             focus_delay=self.focus_delay,
         )
-        after = self._capture_after_settle()
-        diff = ws.board_signature_diff(before.board_sig, after.board_sig)
+        after_state = self._capture_after_settle()
         ts_event = time.time()
         ts = time.strftime("%H:%M:%S", time.localtime(ts_event))
 
+        if after_state.scene == SCENE_POSTGAME:
+            self.current_state = after_state
+            print(f"[{ts}] swipe {direction}: reached post-game screen")
+            print()
+            return MoveResult(
+                direction=direction,
+                changed=True,
+                scene=SCENE_POSTGAME,
+                board_delta=None,
+                game_over=True,
+            )
+
+        if after_state.scene != SCENE_GAME or after_state.frame is None:
+            self.current_state = after_state
+            ws.print_error(f"unexpected scene after swipe: {after_state.scene}")
+            return MoveResult(
+                direction=direction,
+                changed=False,
+                scene=after_state.scene,
+                board_delta=None,
+            )
+
+        after = after_state.frame
+        diff = ws.board_signature_diff(before.board_sig, after.board_sig)
         if diff <= self.board_delta_threshold:
             print(f"[{ts}] swipe {direction}: no board change (boardΔ={diff:.3f})")
-            return False
+            return MoveResult(
+                direction=direction,
+                changed=False,
+                scene=SCENE_GAME,
+                board_delta=diff,
+            )
 
-        self.current_frame = after
+        self.current_state = after_state
         if ws._board_has_unknowns(after.board) or after.preview_label == "unknown":
             ws.print_error("state contains unknown cells or preview label")
         if self.tile_cycle is not None:
@@ -325,7 +781,12 @@ class AutoPlayer:
         print(f"[{ts}] swipe {direction} (boardΔ={diff:.3f})")
         print(self._render_state(after))
         print()
-        return True
+        return MoveResult(
+            direction=direction,
+            changed=True,
+            scene=SCENE_GAME,
+            board_delta=diff,
+        )
 
     def autoplay(
         self,
@@ -345,7 +806,13 @@ class AutoPlayer:
 
             moved = False
             for direction in directions:
-                if self.attempt_move(direction):
+                result = self.attempt_move(direction)
+                if result.game_over:
+                    if result.changed:
+                        moves_made += 1
+                    print("Detected post-game screen. Stopping autoplay.")
+                    return moves_made
+                if result.changed:
                     moves_made += 1
                     moved = True
                     break
@@ -369,6 +836,12 @@ def resolve_window(window_id: Optional[int], auto_window_prefix: str) -> Tuple[i
     return wid, {"id": wid, "app": app_name, "title": win_name}
 
 
+def print_scene_state(state: ScreenState) -> None:
+    print(f"scene={state.scene} best={state.scene_score:.4f}")
+    for scene, score in sorted(state.scene_scores.items(), key=lambda item: item[1]):
+        print(f"  {scene}={score:.4f}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Drive the iPhone Mirroring window with swipes and optional autoplay."
@@ -384,6 +857,26 @@ def parse_args() -> argparse.Namespace:
         choices=("quartz", "screencapture"),
         default="quartz",
         help="Capture backend used for board/preview parsing.",
+    )
+    parser.add_argument(
+        "--scene",
+        action="store_true",
+        help="Print the currently detected UI scene and exit unless more actions are requested.",
+    )
+    parser.add_argument(
+        "--ensure-title",
+        action="store_true",
+        help="Drive the UI to the title screen from any known game/menu state.",
+    )
+    parser.add_argument(
+        "--ensure-game",
+        action="store_true",
+        help="Drive the UI to an active game from title/post-game/menu states.",
+    )
+    parser.add_argument(
+        "--exit-game",
+        action="store_true",
+        help="Abort the current in-progress game back to the title screen.",
     )
     parser.add_argument(
         "--start-game",
@@ -543,13 +1036,68 @@ def main() -> None:
         tap_window(window_id, args.tap_rel[0], args.tap_rel[1], args.focus_delay)
         return
 
+    scene_timeout = max(3.0, args.transition_delay * 4, args.settle_timeout)
+    state = capture_screen_state(window_id, args.capture_backend)
+    if args.scene:
+        print_scene_state(state)
+        if not any(
+            (
+                args.ensure_title,
+                args.ensure_game,
+                args.exit_game,
+                args.start_game,
+                args.retry_game,
+                args.swipe,
+                args.autoplay,
+            )
+        ):
+            return
+
+    if args.exit_game or args.ensure_title:
+        state = ensure_title_scene(
+            window_id,
+            args.capture_backend,
+            focus_delay=args.focus_delay,
+            transition_delay=args.transition_delay,
+            timeout=scene_timeout,
+            poll=args.settle_poll,
+        )
+        if not any((args.start_game, args.retry_game, args.ensure_game, args.swipe, args.autoplay)):
+            print_scene_state(state)
+            return
+
     if args.start_game:
-        start_game_from_title(window_id, args.focus_delay)
-        time.sleep(args.transition_delay)
+        state = start_game_sequence(
+            window_id,
+            args.capture_backend,
+            focus_delay=args.focus_delay,
+            transition_delay=args.transition_delay,
+            timeout=scene_timeout,
+            poll=args.settle_poll,
+        )
 
     if args.retry_game:
-        retry_from_postgame(window_id, args.focus_delay)
-        time.sleep(args.transition_delay)
+        state = retry_game_sequence(
+            window_id,
+            args.capture_backend,
+            focus_delay=args.focus_delay,
+            transition_delay=args.transition_delay,
+            timeout=scene_timeout,
+            poll=args.settle_poll,
+        )
+
+    if args.ensure_game:
+        state = ensure_game_scene(
+            window_id,
+            args.capture_backend,
+            focus_delay=args.focus_delay,
+            transition_delay=args.transition_delay,
+            timeout=scene_timeout,
+            poll=args.settle_poll,
+        )
+
+    if not any((args.swipe, args.autoplay, args.start_game, args.retry_game, args.ensure_game)):
+        return
 
     player.initialize()
     ws.print_legend()

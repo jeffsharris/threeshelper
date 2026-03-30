@@ -66,6 +66,11 @@ Print the current parsed board/preview:
 python3 mirroring_control.py
 ```
 
+Print the currently detected UI scene:
+```bash
+python3 mirroring_control.py --scene
+```
+
 Start a new game from the title screen:
 ```bash
 python3 mirroring_control.py --start-game
@@ -91,10 +96,23 @@ Start from title and immediately self-play:
 python3 mirroring_control.py --start-game --autoplay --max-moves 200
 ```
 
+Drive to a known title or active-game state:
+```bash
+python3 mirroring_control.py --ensure-title
+python3 mirroring_control.py --ensure-game
+```
+
+Abort an in-progress game back to the title screen:
+```bash
+python3 mirroring_control.py --exit-game
+```
+
 Useful notes:
 - Works against the live `iPhone Mirroring` window; the game does not need to exist as a local app target.
+- The driver now distinguishes `title`, `game`, `postgame`, `menu`, and `end_confirm` scenes before deciding which transition routine to run.
 - If the visible board does not look like a fresh game, tile-cycle probability tracking is disabled automatically and the script still plays.
 - `--start-game` taps the title-screen `PLAY THREES` button; `--retry-game` taps the post-game `Retry` button.
+- `--exit-game` follows the full abort path: `menu -> MAIN MENU -> END GAME -> title`.
 - `--tap-rel X Y` sends a single tap at relative window coordinates, which is intended for future game-over/new-game flows.
 - `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.
 
