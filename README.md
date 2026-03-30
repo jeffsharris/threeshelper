@@ -66,6 +66,16 @@ Print the current parsed board/preview:
 python3 mirroring_control.py
 ```
 
+Start a new game from the title screen:
+```bash
+python3 mirroring_control.py --start-game
+```
+
+Start another game from the post-game screen:
+```bash
+python3 mirroring_control.py --retry-game
+```
+
 Send one swipe:
 ```bash
 python3 mirroring_control.py --swipe left
@@ -76,9 +86,15 @@ Self-play from the current board:
 python3 mirroring_control.py --autoplay --max-moves 200
 ```
 
+Start from title and immediately self-play:
+```bash
+python3 mirroring_control.py --start-game --autoplay --max-moves 200
+```
+
 Useful notes:
 - Works against the live `iPhone Mirroring` window; the game does not need to exist as a local app target.
 - If the visible board does not look like a fresh game, tile-cycle probability tracking is disabled automatically and the script still plays.
+- `--start-game` taps the title-screen `PLAY THREES` button; `--retry-game` taps the post-game `Retry` button.
 - `--tap-rel X Y` sends a single tap at relative window coordinates, which is intended for future game-over/new-game flows.
 - `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.
 

@@ -17,6 +17,8 @@ import window_stream as ws
 
 APP_BUNDLE_ID = "com.apple.ScreenContinuity"
 DIRECTIONS = ("up", "down", "left", "right")
+TITLE_PLAY_TAP = (0.50, 0.78)
+POSTGAME_RETRY_TAP = (0.16, 0.145)
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,14 @@ def tap_window(
     _post_mouse(Quartz.kCGEventLeftMouseDown, point)
     time.sleep(0.02)
     _post_mouse(Quartz.kCGEventLeftMouseUp, point)
+
+
+def start_game_from_title(window_id: int, focus_delay: float) -> None:
+    tap_window(window_id, TITLE_PLAY_TAP[0], TITLE_PLAY_TAP[1], focus_delay)
+
+
+def retry_from_postgame(window_id: int, focus_delay: float) -> None:
+    tap_window(window_id, POSTGAME_RETRY_TAP[0], POSTGAME_RETRY_TAP[1], focus_delay)
 
 
 def drag_window(
@@ -376,6 +386,16 @@ def parse_args() -> argparse.Namespace:
         help="Capture backend used for board/preview parsing.",
     )
     parser.add_argument(
+        "--start-game",
+        action="store_true",
+        help="Tap the title-screen PLAY THREES button before continuing.",
+    )
+    parser.add_argument(
+        "--retry-game",
+        action="store_true",
+        help="Tap the post-game Retry button before continuing.",
+    )
+    parser.add_argument(
         "--tap-rel",
         nargs=2,
         type=float,
@@ -477,6 +497,12 @@ def parse_args() -> argparse.Namespace:
         help="Delay after activating iPhone Mirroring before sending the gesture.",
     )
     parser.add_argument(
+        "--transition-delay",
+        type=float,
+        default=0.8,
+        help="Delay after start/retry taps before capturing the new state.",
+    )
+    parser.add_argument(
         "--record-dataset",
         type=str,
         help="Optional dataset directory for saving successful move captures.",
@@ -516,6 +542,14 @@ def main() -> None:
     if args.tap_rel:
         tap_window(window_id, args.tap_rel[0], args.tap_rel[1], args.focus_delay)
         return
+
+    if args.start_game:
+        start_game_from_title(window_id, args.focus_delay)
+        time.sleep(args.transition_delay)
+
+    if args.retry_game:
+        retry_from_postgame(window_id, args.focus_delay)
+        time.sleep(args.transition_delay)
 
     player.initialize()
     ws.print_legend()
