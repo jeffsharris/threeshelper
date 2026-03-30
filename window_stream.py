@@ -184,6 +184,7 @@ BLANK_MEAN_THRESHOLD = 80.0  # calibrated from provided blank tiles (was 50)
 CLASSIFY_INSET_RATIO = 0.12
 GRAY_INSET_RATIO = CLASSIFY_INSET_RATIO
 UNKNOWN_TILE_SIZE = 96
+BOARD_GRID_CALIBRATION_PATH = Path("board_grid_calibration.json")
 BOARD_COLOR_PROTOTYPES = {
     "red": np.array([231.84, 123.65, 141.79]),
     "blue": np.array([132.33, 198.81, 243.71]),
@@ -240,6 +241,7 @@ def three_template() -> Optional[np.ndarray]:
 _three_hash_cache: Optional[List[imagehash.ImageHash]] = None
 _three_detector_cache: Optional[Dict[str, object]] = None
 _gray_detector_cache: Optional[Dict[str, object]] = None
+_board_grid_calibration_cache: Optional[Dict[str, object]] = None
 
 
 def _prepare_image_for_hash(img: Image.Image, margin: float = 0.08) -> Image.Image:
@@ -752,6 +754,38 @@ def _refine_grid_params(
     return xs_ref, ys_ref, inset_x, inset_y, meta
 
 
+def load_board_grid_calibration(
+    path: Path = BOARD_GRID_CALIBRATION_PATH,
+) -> Optional[Dict[str, object]]:
+    global _board_grid_calibration_cache
+    if _board_grid_calibration_cache is not None:
+        return _board_grid_calibration_cache
+    if not path.exists():
+        _board_grid_calibration_cache = None
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        _board_grid_calibration_cache = None
+        return None
+    required = ("col_lefts", "col_rights", "row_tops", "row_bottoms", "normalized")
+    if not all(key in data for key in required):
+        _board_grid_calibration_cache = None
+        return None
+    normalized = data.get("normalized", {})
+    required_norm = ("col_lefts", "col_rights", "row_tops", "row_bottoms")
+    if not all(key in normalized for key in required_norm):
+        _board_grid_calibration_cache = None
+        return None
+    _board_grid_calibration_cache = data
+    return data
+
+
+def clear_board_grid_calibration_cache() -> None:
+    global _board_grid_calibration_cache
+    _board_grid_calibration_cache = None
+
+
 def _estimate_board_background_color(roi: np.ndarray) -> np.ndarray:
     h, w, _ = roi.shape
     sample = max(8, min(h, w) // 12)
@@ -877,6 +911,37 @@ def _apply_inset(box: Tuple[int, int, int, int], inset_ratio: float) -> Tuple[in
     return x0i, y0i, x1i, y1i
 
 
+def _manual_board_cell_outer_boxes(
+    roi: np.ndarray,
+) -> Optional[Tuple[List[Tuple[int, int, Tuple[int, int, int, int]]], Dict[str, object]]]:
+    calibration = load_board_grid_calibration()
+    if not calibration:
+        return None
+    normalized = calibration.get("normalized", {})
+    try:
+        col_lefts = [float(v) for v in normalized["col_lefts"]]
+        col_rights = [float(v) for v in normalized["col_rights"]]
+        row_tops = [float(v) for v in normalized["row_tops"]]
+        row_bottoms = [float(v) for v in normalized["row_bottoms"]]
+    except Exception:
+        return None
+    if not all(len(values) == 4 for values in (col_lefts, col_rights, row_tops, row_bottoms)):
+        return None
+    h, w, _ = roi.shape
+    boxes: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+    for row in range(4):
+        for col in range(4):
+            x0 = int(round(col_lefts[col] * w))
+            x1 = int(round(col_rights[col] * w))
+            y0 = int(round(row_tops[row] * h))
+            y1 = int(round(row_bottoms[row] * h))
+            if x1 <= x0 or y1 <= y0:
+                return None
+            boxes.append((row, col, (x0, y0, x1, y1)))
+    meta = {"method": "manual_calibration"}
+    return boxes, meta
+
+
 def _fallback_board_cell_outer_boxes(
     roi: np.ndarray,
 ) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int]]], Dict[str, float]]:
@@ -893,11 +958,15 @@ def _board_cell_boxes(
     roi: np.ndarray,
     inset_ratio: float = 0.0,
 ) -> Tuple[List[Tuple[int, int, Tuple[int, int, int, int], Tuple[int, int, int, int]]], Dict[str, object]]:
-    detected = _detect_board_cell_outer_boxes(roi)
-    if detected is None:
-        outer_boxes, meta = _fallback_board_cell_outer_boxes(roi)
+    manual = _manual_board_cell_outer_boxes(roi)
+    if manual is not None:
+        outer_boxes, meta = manual
     else:
-        outer_boxes, meta = detected
+        detected = _detect_board_cell_outer_boxes(roi)
+        if detected is None:
+            outer_boxes, meta = _fallback_board_cell_outer_boxes(roi)
+        else:
+            outer_boxes, meta = detected
     boxes = []
     for r, c, outer_box in outer_boxes:
         boxes.append((r, c, outer_box, _apply_inset(outer_box, inset_ratio)))

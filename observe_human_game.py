@@ -22,7 +22,6 @@ DASHBOARD_HTML = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="1">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Threes Human Observer</title>
   <style>
@@ -114,6 +113,7 @@ DASHBOARD_HTML = """<!doctype html>
     const boardNode = document.getElementById("board");
     const detailNode = document.getElementById("details");
     const captureNode = document.getElementById("capture");
+    let lastCaptureKey = null;
 
     function cssClass(state) {
       if (state.run_state === "failure") return "bad";
@@ -145,10 +145,15 @@ DASHBOARD_HTML = """<!doctype html>
       }
       lines.push("session=" + (state.session_dir || ""));
       detailNode.textContent = lines.join("\\n");
-      if (state.latest_board_overlay) {
-        captureNode.src = state.latest_board_overlay + "?ts=" + Date.now();
+      const captureKey = state.latest_capture_id ? String(state.latest_capture_id) + ":" + (state.latest_board_overlay || "") : null;
+      if (state.latest_board_overlay && captureKey !== lastCaptureKey) {
+        captureNode.src = state.latest_board_overlay + "?capture=" + encodeURIComponent(captureKey);
+        lastCaptureKey = captureKey;
       } else {
-        captureNode.removeAttribute("src");
+        if (!state.latest_board_overlay) {
+          captureNode.removeAttribute("src");
+          lastCaptureKey = null;
+        }
       }
     }
 
@@ -678,6 +683,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not auto-open the live dashboard in the default browser.",
     )
+    parser.add_argument(
+        "--stop-on-failure",
+        action="store_true",
+        help="Exit immediately on the first invalid state instead of re-seeding from the current board.",
+    )
     return parser.parse_args()
 
 
@@ -850,6 +860,9 @@ def start_dashboard_server(session_dir: Path, port: int) -> tuple[ThreadingHTTPS
                 payload = self.rfile.read(length)
                 data = json.loads(payload.decode("utf-8"))
                 (session_dir / "grid_calibration.json").write_text(json.dumps(data, indent=2))
+                repo_path = Path.cwd() / "board_grid_calibration.json"
+                repo_path.write_text(json.dumps(data, indent=2))
+                ws.clear_board_grid_calibration_cache()
             except Exception as exc:  # noqa: BLE001
                 self.send_error(400, f"Could not save grid calibration: {exc}")
                 return
@@ -1218,7 +1231,17 @@ def main() -> None:
                 )
                 print(f"Invalid state detected: {failure_reasons}", flush=True)
                 print(f"Artifacts saved to {recorder.session_dir}", flush=True)
-                return
+                if args.stop_on_failure:
+                    return
+                print("Re-seeding observer from the current board and continuing.", flush=True)
+                tracked = False
+                last_stable_frame = None
+                last_snapshot = None
+                stable_state = None
+                stable_count = 0
+                last_move_ts = time.time()
+                time.sleep(args.poll)
+                continue
 
             next_snapshot = event["preview_check"].get("next_snapshot")
             last_snapshot = next_snapshot if isinstance(next_snapshot, tuple) else next_snapshot
