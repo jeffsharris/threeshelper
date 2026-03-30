@@ -74,13 +74,16 @@ DASHBOARD_HTML = """<!doctype html>
       margin: 0 auto;
       padding: 8px 24px 24px;
       display: grid;
-      grid-template-columns: minmax(460px, 1.15fr) minmax(360px, 0.85fr);
+      grid-template-columns: minmax(420px, 1.05fr) minmax(420px, 0.95fr);
       gap: 18px;
       align-items: start;
     }
     .stack {
       display: grid;
       gap: 18px;
+    }
+    .span-2 {
+      grid-column: 1 / -1;
     }
     .panel {
       background: var(--panel);
@@ -163,6 +166,11 @@ DASHBOARD_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 13px;
       line-height: 1.6;
+    }
+    .subtle {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
     }
     pre {
       margin: 0;
@@ -256,7 +264,6 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .bag-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 12px;
     }
@@ -266,22 +273,73 @@ DASHBOARD_HTML = """<!doctype html>
       background: rgba(255, 255, 255, 0.04);
       padding: 12px;
       display: grid;
-      gap: 10px;
+      gap: 12px;
     }
     .bag-top {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .bag-title {
+      display: flex;
+      align-items: center;
       gap: 10px;
     }
-    .bag-count {
-      font-size: 22px;
-      font-weight: 700;
-      line-height: 1;
+    .bag-tiles {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      min-height: 38px;
     }
-    .bag-sub {
+    .bag-empty {
       color: var(--muted);
       font-size: 11px;
       line-height: 1.45;
+    }
+    .bag-prob {
+      text-align: right;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .bag-prob-label {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+      text-align: right;
+    }
+    .big-callout {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background:
+        linear-gradient(90deg, rgba(134, 199, 255, 0.10), rgba(131, 229, 155, 0.06)),
+        rgba(255, 255, 255, 0.03);
+      margin-bottom: 14px;
+    }
+    .big-callout-value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .prob-columns {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+    .prob-card {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 14px;
+    }
+    .prob-card:first-of-type {
+      border-top: none;
+      padding-top: 0;
     }
     .prob-row {
       display: grid;
@@ -289,6 +347,13 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 10px;
       align-items: center;
       font-size: 13px;
+    }
+    .prob-section-title {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 6px 0 2px;
     }
     .prob-tile {
       display: flex;
@@ -355,6 +420,9 @@ DASHBOARD_HTML = """<!doctype html>
       .layout {
         grid-template-columns: 1fr;
       }
+      .span-2 {
+        grid-column: auto;
+      }
     }
     @media (max-width: 720px) {
       .board-header {
@@ -382,7 +450,43 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </header>
   <main class="layout">
+    <section class="panel alt">
+      <div class="board-header">
+        <div>
+          <h2>Current Board</h2>
+          <div class="meta" id="boardSource">Waiting for a board...</div>
+        </div>
+        <div class="next-compact">
+          <div class="next-compact-label">Next Tile</div>
+          <div class="observed-value" id="observedPreview"></div>
+          <div class="next-compact-note" id="observedPreviewNote">Waiting for preview detection...</div>
+        </div>
+      </div>
+      <div class="board-grid" id="boardGrid"></div>
+    </section>
     <section class="panel">
+      <h2>Coming Tile Probabilities</h2>
+      <div class="subtle">
+        After the visible cue is spent, this is the next-cue distribution from the remaining 12-tile bag plus any enabled big-tile bundles.
+      </div>
+      <div class="prob-columns">
+        <div class="prob-card">
+          <div class="label">Small Tile Bag</div>
+          <div class="bag-grid" id="bagGrid"></div>
+        </div>
+        <div class="prob-card">
+          <div class="label">Big Tile Chance</div>
+          <div class="big-callout" id="bigProbability"></div>
+        </div>
+        <div class="prob-card">
+          <div class="label">Tile Odds After The Visible Cue</div>
+          <div class="probs" id="probabilities"></div>
+          <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
+          <div class="bundle-wrap" id="bonusBundles"></div>
+        </div>
+      </div>
+    </section>
+    <section class="panel span-2">
       <h2>Current Screen</h2>
       <div class="chips" id="chips"></div>
       <div class="image-wrap">
@@ -396,48 +500,21 @@ DASHBOARD_HTML = """<!doctype html>
         <pre id="events">Waiting for the capture loop...</pre>
       </div>
     </section>
-    <section class="stack">
-      <section class="panel alt">
-        <div class="board-header">
-          <div>
-            <h2>Current Board</h2>
-            <div class="meta" id="boardSource">Waiting for a board...</div>
-          </div>
-          <div class="next-compact">
-            <div class="next-compact-label">Next Tile</div>
-            <div class="observed-value" id="observedPreview"></div>
-            <div class="next-compact-note" id="observedPreviewNote">Waiting for preview detection...</div>
-          </div>
-        </div>
-        <div class="board-grid" id="boardGrid"></div>
-      </section>
-      <section class="panel">
-        <h2>Coming Tile Probabilities</h2>
-        <div class="label">Small Tile Bag</div>
-        <div class="bag-grid" id="bagGrid"></div>
-        <div class="section">
-          <div class="label">Tile Odds After The Visible Cue</div>
-          <div class="probs" id="probabilities"></div>
-          <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
-          <div class="bundle-wrap" id="bonusBundles"></div>
-        </div>
-      </section>
-      <section class="panel">
-        <h2>Tracker</h2>
-        <div class="meta" id="trackerMeta">Waiting for tracker state...</div>
-        <div class="section">
-          <div class="label">Latest Event</div>
-          <pre id="latestEvent">No events yet.</pre>
-        </div>
-      </section>
-      <section class="panel">
-        <h2>Issues</h2>
-        <pre id="issues" class="issues ok">No issues recorded.</pre>
-      </section>
-      <section class="panel">
-        <h2>Session</h2>
-        <pre id="sessionMeta">Loading...</pre>
-      </section>
+    <section class="panel">
+      <h2>Tracker</h2>
+      <div class="meta" id="trackerMeta">Waiting for tracker state...</div>
+      <div class="section">
+        <div class="label">Latest Event</div>
+        <pre id="latestEvent">No events yet.</pre>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Issues</h2>
+      <pre id="issues" class="issues ok">No issues recorded.</pre>
+    </section>
+    <section class="panel span-2">
+      <h2>Session</h2>
+      <pre id="sessionMeta">Loading...</pre>
     </section>
   </main>
   <script>
@@ -450,6 +527,7 @@ DASHBOARD_HTML = """<!doctype html>
     const issuesNode = document.getElementById("issues");
     const sessionMetaNode = document.getElementById("sessionMeta");
     const bagGridNode = document.getElementById("bagGrid");
+    const bigProbabilityNode = document.getElementById("bigProbability");
     const observedPreviewNode = document.getElementById("observedPreview");
     const observedPreviewNoteNode = document.getElementById("observedPreviewNote");
     const probabilitiesNode = document.getElementById("probabilities");
@@ -572,30 +650,48 @@ DASHBOARD_HTML = """<!doctype html>
         return;
       }
       const chips = smallBag.map((item) => {
-        const tile = tileMarkup(tileInfoForValue(item.value), "mini");
+        const tiles = Array.from({ length: item.remaining || 0 }, () => tileMarkup(tileInfoForValue(item.value), "mini")).join("");
         return [
           `<div class="bag-chip">`,
           `<div class="bag-top">`,
-          tile,
-          `<div class="bag-count">${item.remaining}</div>`,
+          `<div class="bag-title">${tileMarkup(tileInfoForValue(item.value), "mini")}</div>`,
+          `<div>`,
+          `<div class="bag-prob">${(item.percent || 0).toFixed(1)}%</div>`,
+          `<div class="bag-prob-label">next-cue chance</div>`,
           `</div>`,
-          `<div class="bag-sub">${item.remaining} of ${item.base} left in the current 12-tile bag.</div>`,
+          `</div>`,
+          `<div class="bag-tiles">${tiles || `<div class="bag-empty">No tiles left in this bag.</div>`}</div>`,
+          `<div class="bag-sub">${item.remaining} of ${item.base} remaining in the current 12-tile bag.</div>`,
           `</div>`
         ].join("");
       });
       bagGridNode.innerHTML = chips.join("");
     }
 
+    function renderBigProbability(expected) {
+      const percent = expected && expected.big_tile_percent ? expected.big_tile_percent : 0;
+      const note = expected && expected.big_tile_note ? expected.big_tile_note : "No big tiles are currently eligible.";
+      bigProbabilityNode.innerHTML = [
+        `<div>`,
+        `<div class="label">Any Big Block Next</div>`,
+        `<div class="big-callout-value">${percent.toFixed(1)}%</div>`,
+        `<div class="subtle">${note}</div>`,
+        `</div>`,
+      ].join("");
+    }
+
     function renderProbabilities(expected) {
       if (!expected || !expected.available) {
         bagGridNode.innerHTML = "";
+        bigProbabilityNode.innerHTML = "";
         probabilitiesNode.innerHTML = "";
         probabilitiesNoteNode.textContent = (expected && expected.note) ? expected.note : "Probability model unavailable.";
         bonusBundlesNode.innerHTML = "";
         return;
       }
       renderBag(expected);
-      const rows = (expected.items || []).map((item) => {
+      renderBigProbability(expected);
+      const makeRow = (item) => {
         const width = Math.max(0, Math.min(100, item.percent || 0));
         const tile = tileMarkup(tileInfoForValue(item.value), "mini");
         return [
@@ -605,8 +701,18 @@ DASHBOARD_HTML = """<!doctype html>
           `<div>${width.toFixed(1)}%</div>`,
           `</div>`
         ].join("");
-      });
-      probabilitiesNode.innerHTML = rows.join("");
+      };
+      const items = expected.items || [];
+      const smallRows = items.filter((item) => (item.value || 0) <= 3).map(makeRow).join("");
+      const bigRows = items.filter((item) => (item.value || 0) > 3).map(makeRow).join("");
+      const sections = [];
+      if (smallRows) {
+        sections.push(`<div class="prob-section-title">Small Tile Odds</div>${smallRows}`);
+      }
+      if (bigRows) {
+        sections.push(`<div class="prob-section-title">Big Tile Odds</div>${bigRows}`);
+      }
+      probabilitiesNode.innerHTML = sections.join("");
       probabilitiesNoteNode.textContent = expected.note || "";
       const bundles = expected.bonus_bundles || [];
       if (!bundles.length) {
@@ -1029,8 +1135,11 @@ class LiveTrackerEngine:
             return {
                 "available": False,
                 "items": [],
+                "small_bag": [],
                 "note": note,
                 "bonus_values": bonus_values,
+                "big_tile_percent": 0.0,
+                "big_tile_note": "No exact big-tile odds until the tracker is seeded from a fresh game.",
                 "max_tile": max_tile,
             }
         cycle.restore(self.last_snapshot)
@@ -1044,20 +1153,25 @@ class LiveTrackerEngine:
                 "value": ws.SMALL_TILE_VALUES["gray"],
                 "remaining": cycle.small_counts.get("gray", 0),
                 "base": 4,
+                "probability": probs.get("gray", 0.0),
             },
             {
                 "key": "blue",
                 "value": ws.SMALL_TILE_VALUES["blue"],
                 "remaining": cycle.small_counts.get("blue", 0),
                 "base": 4,
+                "probability": probs.get("blue", 0.0),
             },
             {
                 "key": "red",
                 "value": ws.SMALL_TILE_VALUES["red"],
                 "remaining": cycle.small_counts.get("red", 0),
                 "base": 4,
+                "probability": probs.get("red", 0.0),
             },
         ]
+        for bag_item in small_bag:
+            bag_item["percent"] = round(bag_item["probability"] * 100.0, 1)
         items = [
             {"key": "blue", "value": ws.SMALL_TILE_VALUES["blue"], "probability": probs.get("blue", 0.0)},
             {"key": "red", "value": ws.SMALL_TILE_VALUES["red"], "probability": probs.get("red", 0.0)},
@@ -1094,6 +1208,11 @@ class LiveTrackerEngine:
                     }
                 )
             note += f" Bonus total: {bonus_total:.1f}%. Each 3-tile bundle below is equally likely once a bonus cue appears."
+        big_tile_note = (
+            "Big tiles are not enabled yet."
+            if large_prob <= 0
+            else f"Any big block next: {bonus_total:.1f}%. Enabled by the current max tile of {max_tile}."
+        )
         return {
             "available": True,
             "items": items,
@@ -1101,6 +1220,8 @@ class LiveTrackerEngine:
             "note": note,
             "bonus_values": bonus_values,
             "bonus_bundles": bundle_items,
+            "big_tile_percent": bonus_total,
+            "big_tile_note": big_tile_note,
             "max_tile": max_tile,
         }
 
