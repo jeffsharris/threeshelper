@@ -1026,10 +1026,18 @@ class LiveTrackerEngine:
             self.last_visible_snapshot = self.last_snapshot
         if not self.tracked:
             initial_error = ws._initial_state_error(settled.board, settled.preview_label)
-            if initial_error is not None and not self.attach_current_game:
-                self.run_state = "waiting_for_fresh_game"
-                self.message = initial_error
-                return
+            observed_error = None
+            if initial_error is not None:
+                observed_error = ws._observed_game_state_error(settled.board, settled.preview_label)
+            if initial_error is not None:
+                if not self.attach_current_game:
+                    self.run_state = "waiting_for_fresh_game"
+                    self.message = initial_error
+                    return
+                if observed_error is not None:
+                    self.run_state = "waiting_for_fresh_game"
+                    self.message = observed_error
+                    return
             self.last_snapshot = seed_snapshot(settled)
             if window_id is not None:
                 self.last_capture_id = self.recorder.record_game_state(settled, window_id, ts_event)

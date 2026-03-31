@@ -1723,6 +1723,34 @@ def _initial_state_error(board: List[List[str]], preview_label: str) -> Optional
     return None
 
 
+def _observed_game_state_error(
+    board: List[List[str]],
+    preview_label: Optional[str] = None,
+    *,
+    require_known_preview: bool = True,
+) -> Optional[str]:
+    """
+    Return an error message if a live observed board is too implausible to attach to.
+
+    This is intentionally looser than `_initial_state_error`: it allows arbitrary
+    in-progress boards, but it rejects obviously bad reads such as an empty grid,
+    unknown cells, or a board that somehow lost the mandatory 48+ anchor tile.
+    """
+    if require_known_preview and preview_label not in ("red", "blue", "gray", "large_candidates"):
+        return f"observed state invalid: preview must be known, got {preview_label!r}"
+    if _board_has_unknowns(board):
+        return "observed state invalid: board contains unknown cells"
+    nonempty = sum(1 for row in board for cell in row if cell != TOKEN_EMPTY)
+    if nonempty == 0:
+        return "observed state invalid: board is empty"
+    if board_max_tile(board) < BONUS_TRIGGER_TILE:
+        return (
+            "observed state invalid: expected at least one 48+ tile on the board, "
+            f"got max={board_max_tile(board)}"
+        )
+    return None
+
+
 def preview_possible(tile_cycle: "TileCycle", preview_label: str) -> Tuple[bool, str]:
     """
     Return (is_possible, reason) for the current preview tile under the tile_cycle state.

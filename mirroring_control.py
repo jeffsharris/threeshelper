@@ -471,20 +471,14 @@ def _is_plausible_game_frame(
         return False
     if bright_fraction > 0.55:
         return False
+    observed_error = ws._observed_game_state_error(
+        [list(row) for row in board],
+        preview_label,
+        require_known_preview=False,
+    )
+    if observed_error is not None:
+        return False
     if preview_label in KNOWN_PREVIEW_LABELS:
-        return True
-
-    nonempty = 0
-    unknown = 0
-    for row in board:
-        for cell in row:
-            if cell == ws.TOKEN_OTHER:
-                unknown += 1
-            elif cell != ws.TOKEN_EMPTY:
-                nonempty += 1
-    if nonempty >= 4 and unknown <= 4:
-        return True
-    if nonempty >= 2 and unknown == 0:
         return True
     return False
 

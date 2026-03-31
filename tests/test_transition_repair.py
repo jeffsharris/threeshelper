@@ -90,6 +90,30 @@ class TransitionRepairTests(unittest.TestCase):
         self.assertEqual(repair.step.inserted_pos, (3, 2))
         self.assertEqual(repair.mismatch_positions, [(0, 1)])
 
+    def test_observed_game_state_rejects_empty_board(self):
+        board = [[ws.TOKEN_EMPTY] * 4 for _ in range(4)]
+        err = ws._observed_game_state_error(board, "gray")
+        self.assertEqual(err, "observed state invalid: board is empty")
+
+    def test_observed_game_state_rejects_unknown_cells(self):
+        board = [
+            ["1536", "48", "48", "6"],
+            [ws.SMALL_COLOR_MAP["red"], ws.TOKEN_EMPTY, "6", "3"],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.SMALL_COLOR_MAP["blue"]],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.TOKEN_OTHER, "3"],
+        ]
+        err = ws._observed_game_state_error(board, "red")
+        self.assertEqual(err, "observed state invalid: board contains unknown cells")
+
+    def test_observed_game_state_accepts_valid_midgame_board(self):
+        board = [
+            ["1536", "24", "12", "3"],
+            [ws.SMALL_COLOR_MAP["red"], ws.SMALL_COLOR_MAP["blue"], "12", ws.SMALL_COLOR_MAP["red"]],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.SMALL_COLOR_MAP["red"], ws.SMALL_COLOR_MAP["red"]],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.SMALL_COLOR_MAP["blue"], ws.TOKEN_EMPTY],
+        ]
+        self.assertIsNone(ws._observed_game_state_error(board, "gray"))
+
 
 if __name__ == "__main__":
     unittest.main()
