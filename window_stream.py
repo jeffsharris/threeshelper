@@ -54,7 +54,10 @@ KEYCODES = {
 
 SMALL_BAG_SIZE = 12
 BONUS_TRIGGER_TILE = 48
-BONUS_PROBABILITY = 1.0 / 21.0
+LARGE_DELAY_SMALLS = 20
+LARGE_PREVIEW_OFFSET = 1
+LARGE_DELAY_PREVIEWS = LARGE_DELAY_SMALLS + LARGE_PREVIEW_OFFSET
+LARGE_SPAN_SMALLS = 20
 SMALL_TILE_VALUES = {
     "red": 2,
     "blue": 1,
@@ -64,43 +67,68 @@ SMALL_TILE_VALUES = {
 
 class TileCycle:
     """
-    Tracks the 12-tile small bag (4 red / 4 blue / 4 gray) and whether bonus tiles
-    are eligible based on the largest tile currently on the board.
+    Tracks the 12-tile small bag (4 red / 4 blue / 4 gray) plus the large-tile
+    schedule used by Threes once bonus tiles are unlocked.
     """
 
     def __init__(self) -> None:
         self.small_counts: Dict[str, int] = {"red": 4, "blue": 4, "gray": 4}
         self.small_pos = 0  # small tiles consumed in the current 12-tile bag
         self.small_seen_total = 0  # total small tiles consumed since game start
+        self.span_small_pos = 0  # small previews consumed inside the active 20-small large span
+        self.large_pending = False  # whether the current large span still owes one big tile
         self.max_tile = 0
 
     def _reset_small(self) -> None:
         self.small_counts = {"red": 4, "blue": 4, "gray": 4}
         self.small_pos = 0
 
+    def _start_new_large_span(self) -> None:
+        self.span_small_pos = 0
+        self.large_pending = True
+
     def set_max_tile(self, max_tile: int) -> None:
         self.max_tile = max(0, int(max_tile))
 
     def update(self, label: str) -> None:
         """
-        Record an observed preview label. Only red/blue/gray consume the 12-tile bag.
-        Bonus tiles are generated independently once the board has reached 48.
+        Record an observed preview label.
+
+        Red/blue/gray/unknown previews advance the 12-tile bag and the global
+        small-preview counter. Large-candidate previews do not consume a small
+        tile, but they do satisfy the pending large in the current 20-small span.
         """
-        if label in self.small_counts:
+        is_large = label == "large_candidates"
+        count_as_small = not is_large
+
+        if count_as_small:
             self.small_pos += 1
             self.small_seen_total += 1
-            if self.small_counts[label] > 0:
-                self.small_counts[label] -= 1
+            if self.small_seen_total == LARGE_DELAY_PREVIEWS:
+                self._start_new_large_span()
+            elif self.small_seen_total > LARGE_DELAY_PREVIEWS:
+                self.span_small_pos += 1
+
+        if label in self.small_counts and self.small_counts[label] > 0:
+            self.small_counts[label] -= 1
+
+        if is_large and self.large_pending:
+            self.large_pending = False
+
         if self.small_pos >= SMALL_BAG_SIZE:
             self._reset_small()
 
+        if self.small_seen_total >= LARGE_DELAY_PREVIEWS:
+            self.span_small_pos = min(self.span_small_pos, LARGE_SPAN_SMALLS)
+            if not self.large_pending and self.span_small_pos >= LARGE_SPAN_SMALLS:
+                self._start_new_large_span()
+
     def probabilities(self) -> Dict[str, float]:
         """
-        Return probabilities for the next preview label.
+        Return actual next-cue probabilities.
 
-        Once bonus tiles are enabled, the game shows the bonus band with a fixed
-        probability and otherwise falls back to the small-tile bag. The returned
-        probabilities therefore sum to 1.0.
+        Small-tile odds are scaled by the chance that the next cue is not a large
+        bundle, so the returned probabilities sum to 1.0.
         """
         small_slots_left = max(1, SMALL_BAG_SIZE - self.small_pos)
         large_prob = self.large_probability()
@@ -114,24 +142,39 @@ class TileCycle:
         return probs
 
     def large_probability(self) -> float:
-        """Probability that the next preview is the bonus (+) hint."""
+        """Probability that the next preview is the large-tile bundle cue."""
         if self.max_tile < BONUS_TRIGGER_TILE:
             return 0.0
-        return BONUS_PROBABILITY
+        if self.small_seen_total < LARGE_DELAY_PREVIEWS:
+            return 0.0
+        if not self.large_pending:
+            return 0.0
+        remaining_slots = max(1, LARGE_SPAN_SMALLS + 1 - self.span_small_pos)
+        return 1.0 / remaining_slots
+
+    def bonus_max_tile(self) -> int:
+        """
+        Largest big tile currently allowed by the board state.
+
+        Threes limits spontaneous bonus tiles to two levels below the largest tile
+        already on the board, so a 1536 board caps at 384.
+        """
+        if self.max_tile < BONUS_TRIGGER_TILE:
+            return 0
+        return max(6, self.max_tile // 4)
 
     def bonus_values(self) -> List[int]:
         """
         Return the ordered support for bonus tiles at the current board max.
 
-        If the largest tile on the board is M, the possible bonus bundles range from
-        [6, 12, 24] up to [M/4, M/2, M]. The support therefore spans
-        6, 12, 24, ... up to M.
+        If the largest tile on the board is M, the support spans
+        6, 12, 24, ... up to M/4.
         """
         if self.max_tile < BONUS_TRIGGER_TILE:
             return []
         values: List[int] = []
         value = 6
-        limit = max(6, self.max_tile)
+        limit = self.bonus_max_tile()
         while value <= limit:
             values.append(value)
             value *= 2
@@ -161,22 +204,51 @@ class TileCycle:
                 hits[value] += 1
         return {value: count / total_slots for value, count in hits.items() if count > 0}
 
+    def large_schedule_note(self) -> str:
+        if self.max_tile < BONUS_TRIGGER_TILE:
+            return f"Big tiles stay locked until a {BONUS_TRIGGER_TILE} tile is on the board."
+        if self.small_seen_total < LARGE_DELAY_PREVIEWS:
+            remaining = LARGE_DELAY_PREVIEWS - self.small_seen_total
+            plural = "preview" if remaining == 1 else "previews"
+            verb = "remains" if remaining == 1 else "remain"
+            return f"Big tiles unlock after {LARGE_DELAY_PREVIEWS} small previews. {remaining} {plural} {verb}."
+        if self.large_pending:
+            remaining_slots = max(1, LARGE_SPAN_SMALLS + 1 - self.span_small_pos)
+            return f"One big-tile bundle is still pending in the current {LARGE_SPAN_SMALLS}-small span ({remaining_slots} preview slots left)."
+        remaining_smalls = max(0, LARGE_SPAN_SMALLS - self.span_small_pos)
+        plural = "preview" if remaining_smalls == 1 else "previews"
+        return f"This span already used its big tile. {remaining_smalls} more small {plural} until the next big-tile span."
+
     def snapshot(self) -> Tuple[Dict[str, int], int, int, int, bool, int]:
         return (
             self.small_counts.copy(),
             self.small_pos,
             self.small_seen_total,
+            self.span_small_pos,
+            self.large_pending,
             self.max_tile,
-            False,  # retained for backward compatibility with older history tuples
-            0,  # reserved for backward compatibility
         )
 
     def restore(self, snapshot: Tuple[Dict[str, int], int, int, int, bool, int]) -> None:
-        counts, s_pos, small_seen_total, max_tile, _unused_flag, _reserved = snapshot
+        counts, s_pos, small_seen_total, v4, v5, v6 = snapshot
         self.small_counts = counts.copy()
         self.small_pos = s_pos
         self.small_seen_total = small_seen_total
-        self.max_tile = max_tile
+        if isinstance(v6, int) and v6 > 0:
+            self.span_small_pos = int(v4)
+            self.large_pending = bool(v5)
+            self.max_tile = int(v6)
+            return
+
+        # Best-effort compatibility for older simplified snapshots that only stored
+        # the board max in the fourth slot.
+        self.max_tile = max(0, int(v4))
+        if self.small_seen_total < LARGE_DELAY_PREVIEWS:
+            self.span_small_pos = 0
+            self.large_pending = False
+            return
+        self.span_small_pos = min(max(0, self.small_seen_total - LARGE_DELAY_PREVIEWS), LARGE_SPAN_SMALLS)
+        self.large_pending = True
 
 
 def format_state(tile_cycle: TileCycle, show_debug: bool = True) -> str:
@@ -200,7 +272,10 @@ def format_state(tile_cycle: TileCycle, show_debug: bool = True) -> str:
     if show_debug:
         bonus_vals = tile_cycle.bonus_values()
         vals_str = ",".join(str(v) for v in bonus_vals) if bonus_vals else "-"
-        parts.append(f"dbg max={tile_cycle.max_tile} bonus={vals_str}")
+        parts.append(
+            f"dbg span={tile_cycle.span_small_pos}/{LARGE_SPAN_SMALLS} "
+            f"pend={tile_cycle.large_pending} max={tile_cycle.max_tile} bonus={vals_str}"
+        )
     return " | ".join(parts)
 
 
@@ -1617,9 +1692,9 @@ def preview_possible(tile_cycle: "TileCycle", preview_label: str) -> Tuple[bool,
             return True, ""
         return False, f"no {preview_label} tiles remaining in pool"
     if preview_label == "large_candidates":
-        if tile_cycle.large_probability() > 0:
+        if tile_cycle.large_probability() > 0 and tile_cycle.bonus_values():
             return True, ""
-        return False, "bonus tiles not enabled yet (need a 48-tile on board)"
+        return False, tile_cycle.large_schedule_note()
     return True, ""  # unknown preview labels are ignored
 
 
@@ -1652,6 +1727,8 @@ def seed_tile_cycle_from_initial_state(
     # Board tiles have been consumed from the 12-span.
     tile_cycle.small_pos = initial_seen
     tile_cycle.small_seen_total = 0
+    tile_cycle.span_small_pos = 0
+    tile_cycle.large_pending = False
     tile_cycle.set_max_tile(board_max_tile(board))
 
 

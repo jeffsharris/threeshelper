@@ -295,8 +295,10 @@ DASHBOARD_HTML = """<!doctype html>
       grid-template-columns: repeat(2, 1fr);
       gap: 3px;
     }
-    .slot-grid.empty {
-      opacity: 0.18;
+    .slot-spacer {
+      width: 34px;
+      min-width: 34px;
+      height: 1px;
     }
     .slot-cell {
       width: 15px;
@@ -566,7 +568,7 @@ DASHBOARD_HTML = """<!doctype html>
       const smallBag = new Map((expected.small_bag || []).map((item) => [item.value, item]));
       const makeSlots = (item) => {
         if (!item) {
-          return `<div class="slot-grid empty">${Array.from({ length: 4 }, () => '<div class="slot-cell"></div>').join("")}</div>`;
+          return `<div class="slot-spacer" aria-hidden="true"></div>`;
         }
         const filled = Math.max(0, Math.min(4, item.remaining || 0));
         const filledMarkup = Array.from({ length: filled }, () => tileMarkup(tileInfoForValue(item.value), "slot")).join("");
@@ -999,6 +1001,8 @@ class LiveTrackerEngine:
         cycle = ws.TileCycle()
         cycle.set_max_tile(max_tile)
         bonus_values = cycle.bonus_values()
+        bonus_cap = cycle.bonus_max_tile()
+        locked_note = cycle.large_schedule_note()
         if self.last_snapshot is None:
             note = "Start tracking from a fresh game to compute exact cue odds after the visible tile is spent."
             return {
@@ -1008,7 +1012,9 @@ class LiveTrackerEngine:
                 "note": note,
                 "bonus_values": bonus_values,
                 "big_tile_percent": 0.0,
-                "big_tile_note": "No exact big-tile odds until the tracker is seeded from a fresh game.",
+                "big_tile_note": f"No exact big-tile odds until the tracker is seeded from a fresh game. {locked_note}",
+                "large_schedule_note": locked_note,
+                "bonus_cap": bonus_cap,
                 "max_tile": max_tile,
             }
         cycle.restore(self.last_snapshot)
@@ -1060,10 +1066,8 @@ class LiveTrackerEngine:
         for item in items:
             item["percent"] = round(item["probability"] * 100.0, 1)
         bonus_total = round(large_prob * 100.0, 1)
-        note = (
-            "These odds are for the cue that should appear after the current visible tile is used. "
-            f"Bag progress: {cycle.small_pos}/12 spent."
-        )
+        note = "These odds are for the cue that should appear after the current visible tile is used. "
+        note += f"Bag progress: {cycle.small_pos}/12 spent."
         bundle_items = []
         if bonus_windows:
             conditional_percent = round(100.0 / len(bonus_windows), 1)
@@ -1076,12 +1080,21 @@ class LiveTrackerEngine:
                         "overall_percent": round((large_prob / len(bonus_windows)) * 100.0, 1),
                     }
                 )
-            note += f" Bonus total: {bonus_total:.1f}%. Each 3-tile bundle below is equally likely once a bonus cue appears."
-        big_tile_note = (
-            "Big tiles are not enabled yet."
-            if large_prob <= 0
-            else f"Any big block next: {bonus_total:.1f}%. Enabled by the current max tile of {max_tile}."
-        )
+            note += f" Big-tile support runs from 6 to {bonus_cap}."
+        schedule_note = cycle.large_schedule_note()
+        if large_prob <= 0:
+            big_tile_note = schedule_note
+        else:
+            bundle_note = (
+                f"grouped into {len(bonus_windows)} equal 3-tile bundles"
+                if bonus_windows
+                else "with no 3-tile bundle data available yet"
+            )
+            big_tile_note = (
+                f"Any big block next: {bonus_total:.1f}%. "
+                f"Allowed big tiles run from 6 to {bonus_cap}, {bundle_note}. "
+                f"{schedule_note}"
+            )
         return {
             "available": True,
             "items": items,
@@ -1091,6 +1104,8 @@ class LiveTrackerEngine:
             "bonus_bundles": bundle_items,
             "big_tile_percent": bonus_total,
             "big_tile_note": big_tile_note,
+            "large_schedule_note": schedule_note,
+            "bonus_cap": bonus_cap,
             "max_tile": max_tile,
         }
 
