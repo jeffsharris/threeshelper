@@ -19,6 +19,12 @@ from state_hunt import HarnessRecorder
 from tracker_runtime import build_move_event, frame_with_board, render_tracked_board, same_semantics, seed_snapshot
 
 
+ACTION_FOCUS_DELAY = 0.08
+ACTION_TRANSITION_DELAY = 0.35
+ACTION_TIMEOUT = 10.0
+ACTION_POLL = 0.15
+
+
 DASHBOARD_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -68,6 +74,46 @@ DASHBOARD_HTML = """<!doctype html>
       font-size: 14px;
       line-height: 1.6;
       max-width: 980px;
+    }
+    .header-row {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .action-button {
+      border: 1px solid rgba(131, 229, 155, 0.4);
+      background: rgba(131, 229, 155, 0.12);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+    }
+    .action-button:hover:enabled {
+      background: rgba(131, 229, 155, 0.18);
+      border-color: rgba(131, 229, 155, 0.56);
+      transform: translateY(-1px);
+    }
+    .action-button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+      transform: none;
+    }
+    .action-status {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      min-height: 1.4em;
     }
     .layout {
       max-width: 1500px;
@@ -354,10 +400,18 @@ DASHBOARD_HTML = """<!doctype html>
 </head>
 <body>
   <header>
-    <h1>Threes Live Debug</h1>
-    <div class="subtitle">
-      Live mirrored-phone capture, live board parsing, and live tracker state in one place.
-      The right side is intentionally focused on the signals that matter: current board state and next-tile expectations.
+    <div class="header-row">
+      <div>
+        <h1>Threes Live Debug</h1>
+        <div class="subtitle">
+          Live mirrored-phone capture, live board parsing, and live tracker state in one place.
+          The right side is intentionally focused on the signals that matter: current board state and next-tile expectations.
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="action-button" id="startNewGameButton" type="button">Start New Game</button>
+        <div class="action-status" id="actionStatus">Ready.</div>
+      </div>
     </div>
   </header>
   <main class="layout">
@@ -443,6 +497,8 @@ DASHBOARD_HTML = """<!doctype html>
     const probabilitiesNoteNode = document.getElementById("probabilitiesNote");
     const fullImageNode = document.getElementById("fullImage");
     const fullPlaceholderNode = document.getElementById("fullPlaceholder");
+    const startNewGameButtonNode = document.getElementById("startNewGameButton");
+    const actionStatusNode = document.getElementById("actionStatus");
 
     function chipClass(kind) {
       if (kind === "good") return "chip good";
@@ -553,7 +609,33 @@ DASHBOARD_HTML = """<!doctype html>
 
     function renderBigProbability(expected) {
       const percent = expected && expected.big_tile_percent ? expected.big_tile_percent : 0;
-      bigProbabilityNode.textContent = `Any big block next ${percent.toFixed(1)}%`;
+      const countdown = expected && expected.big_tile_countdown_label ? expected.big_tile_countdown_label : "";
+      if (percent > 0) {
+        bigProbabilityNode.textContent = `Any plus block next ${percent.toFixed(1)}%`;
+        return;
+      }
+      bigProbabilityNode.textContent = countdown ? `Plus block ${countdown}` : "Any plus block next 0.0%";
+    }
+
+    function renderActions(actions) {
+      const busy = !!(actions && actions.busy);
+      startNewGameButtonNode.disabled = busy;
+      actionStatusNode.textContent = (actions && actions.message) ? actions.message : "Ready.";
+    }
+
+    async function triggerStartNewGame() {
+      startNewGameButtonNode.disabled = true;
+      actionStatusNode.textContent = "Starting a fresh Threes game...";
+      try {
+        const response = await fetch("/api/action/start_new_game", {
+          method: "POST",
+          cache: "no-store",
+        });
+        const payload = await response.json();
+        actionStatusNode.textContent = payload.message || "Start-new-game action sent.";
+      } catch (error) {
+        actionStatusNode.textContent = "Start-new-game request failed.";
+      }
     }
 
     function renderProbabilities(expected) {
@@ -619,6 +701,7 @@ DASHBOARD_HTML = """<!doctype html>
       }
       renderObservedPreview(state.tracker.observed_preview);
       renderProbabilities(state.tracker.expected_next);
+      renderActions(state.actions);
       const issues = (state.issues && state.issues.length) ? state.issues : [];
       issuesNode.className = issues.length ? "issues" : "issues ok";
       issuesNode.textContent = issues.length ? issues.join("\\n") : "No issues recorded.";
@@ -651,6 +734,9 @@ DASHBOARD_HTML = """<!doctype html>
     refresh().catch((error) => {
       issuesNode.className = "issues";
       issuesNode.textContent = "Dashboard error: " + error.message;
+    });
+    startNewGameButtonNode.addEventListener("click", () => {
+      triggerStartNewGame().catch(() => {});
     });
     setInterval(() => refresh().catch(() => {}), 150);
   </script>
@@ -700,6 +786,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not auto-open the dashboard in the default browser.",
     )
+    parser.add_argument(
+        "--recheck-attempts",
+        type=int,
+        default=3,
+        help="Extra capture attempts to retry before declaring a board-read failure.",
+    )
+    parser.add_argument(
+        "--recheck-delay",
+        type=float,
+        default=0.06,
+        help="Delay between extra capture attempts when retrying a bad board read.",
+    )
     return parser.parse_args()
 
 
@@ -733,16 +831,22 @@ class LiveTrackerEngine:
         self,
         recorder: HarnessRecorder,
         *,
+        capture_backend: str,
         attach_current_game: bool,
         settle_frames: int,
         settle_threshold: float,
         max_recovery_depth: int,
+        recheck_attempts: int,
+        recheck_delay: float,
     ) -> None:
         self.recorder = recorder
+        self.capture_backend = capture_backend
         self.attach_current_game = attach_current_game
         self.settle_frames = settle_frames
         self.settle_threshold = settle_threshold
         self.max_recovery_depth = max_recovery_depth
+        self.recheck_attempts = max(0, recheck_attempts)
+        self.recheck_delay = max(0.0, recheck_delay)
         self.events: Deque[str] = deque(maxlen=30)
         self.issue_log: Deque[str] = deque(maxlen=12)
         self.tracked = False
@@ -781,6 +885,69 @@ class LiveTrackerEngine:
         if new_game:
             self.game_index += 1
             self.move_index = 0
+
+    def _event_failure_reasons(self, event: Dict[str, object]) -> List[str]:
+        reasons: List[str] = []
+        transition_check = event["transition_check"]
+        if not event["preview_check"].get("valid", True):
+            reasons.append(f"preview_invalid: {event['preview_check'].get('reason', '')}")
+        if not transition_check.get("valid", True):
+            reasons.append(f"transition_invalid: {transition_check.get('reason', '')}")
+        if event["unknown_board"]:
+            reasons.append("board_contains_unknowns")
+        if event["unknown_preview"]:
+            reasons.append("preview_unknown")
+        return reasons
+
+    def _should_retry_transition(self, reasons: List[str], window_id: Optional[int]) -> bool:
+        if window_id is None or self.recheck_attempts <= 0 or not reasons:
+            return False
+        recoverable_prefixes = ("transition_invalid:",)
+        recoverable_exact = {"board_contains_unknowns"}
+        return all(
+            reason.startswith(recoverable_prefixes) or reason in recoverable_exact
+            for reason in reasons
+        )
+
+    def _retry_transition_capture(
+        self,
+        before_frame: mc.FrameState,
+        before_snapshot: Optional[tuple],
+        initial_after_frame: mc.FrameState,
+        game_index: int,
+        move_index_start: int,
+        window_id: int,
+    ) -> tuple[Optional[Dict[str, object]], Optional[mc.FrameState], int]:
+        for attempt in range(1, self.recheck_attempts + 1):
+            time.sleep(self.recheck_delay)
+            retry_state = mc.capture_screen_state(window_id, self.capture_backend)
+            if retry_state.scene != mc.SCENE_GAME or retry_state.frame is None:
+                continue
+            retry_frame = retry_state.frame
+            if same_semantics(before_frame, retry_frame):
+                continue
+            retry_event = build_move_event(
+                before_frame,
+                before_snapshot,
+                retry_frame,
+                game_index=game_index,
+                move_index_start=move_index_start,
+                capture_id=0,
+                max_recovery_depth=self.max_recovery_depth,
+            )
+            retry_reasons = self._event_failure_reasons(retry_event)
+            if retry_reasons:
+                continue
+            retry_event["capture_retry"] = {
+                "reason": "resolved on a later confirmation frame",
+                "attempt": attempt,
+                "initial_after_board": initial_after_frame.board,
+                "initial_after_preview": initial_after_frame.preview_label,
+                "resolved_after_board": retry_event.get("after_board"),
+                "resolved_after_preview": retry_event.get("after_preview_label"),
+            }
+            return retry_event, retry_frame, attempt
+        return None, None, 0
 
     def observe(self, state: mc.ScreenState, window_id: Optional[int], ts_event: float) -> None:
         self.failure_reasons = []
@@ -894,35 +1061,47 @@ class LiveTrackerEngine:
             self.message = "Tracking live game state."
             return
 
-        capture_id = self.last_capture_id
-        if window_id is not None:
-            capture_id = self.recorder.record_game_state(settled, window_id, ts_event)
-        capture_id = capture_id or 0
         move_index_start = self.move_index + 1
+        final_frame = settled
+        final_ts_event = ts_event
         event = build_move_event(
             self.last_stable_frame,
             self.last_snapshot,
-            settled,
+            final_frame,
             game_index=self.game_index,
             move_index_start=move_index_start,
-            capture_id=capture_id,
+            capture_id=0,
             max_recovery_depth=self.max_recovery_depth,
         )
+        failure_reasons = self._event_failure_reasons(event)
+        if self._should_retry_transition(failure_reasons, window_id):
+            recovered_event, recovered_frame, retry_attempt = self._retry_transition_capture(
+                self.last_stable_frame,
+                self.last_snapshot,
+                settled,
+                game_index=self.game_index,
+                move_index_start=move_index_start,
+                window_id=window_id or 0,
+            )
+            if recovered_event is not None and recovered_frame is not None:
+                event = recovered_event
+                final_frame = recovered_frame
+                final_ts_event = time.time()
+                failure_reasons = []
+                self._append_event(
+                    f"Move {move_index_start}: recovered on confirmation frame {retry_attempt}."
+                )
+
+        capture_id = self.last_capture_id or 0
+        if window_id is not None:
+            capture_id = self.recorder.record_game_state(final_frame, window_id, final_ts_event)
+        event["after_capture_id"] = capture_id
         self.move_index += int(event.get("step_count", 1))
         event["move_index"] = self.move_index
         self.recorder.append_event(event)
         self.latest_event = event
 
-        failure_reasons: List[str] = []
-        transition_check = event["transition_check"]
-        if not event["preview_check"].get("valid", True):
-            failure_reasons.append(f"preview_invalid: {event['preview_check'].get('reason', '')}")
-        if not transition_check.get("valid", True):
-            failure_reasons.append(f"transition_invalid: {transition_check.get('reason', '')}")
-        if event["unknown_board"]:
-            failure_reasons.append("board_contains_unknowns")
-        if event["unknown_preview"]:
-            failure_reasons.append("preview_unknown")
+        failure_reasons = self._event_failure_reasons(event)
 
         if failure_reasons:
             self.failure_reasons = failure_reasons
@@ -954,12 +1133,22 @@ class LiveTrackerEngine:
 
         next_snapshot = event["preview_check"].get("next_snapshot")
         self.last_snapshot = next_snapshot if isinstance(next_snapshot, tuple) else next_snapshot
-        self.last_stable_frame = frame_with_board(settled, event.get("after_board"))
+        self.last_stable_frame = frame_with_board(final_frame, event.get("after_board"))
         self.last_capture_id = capture_id
         self.run_state = "tracking"
         self.message = "Tracking live game state."
         directions = event.get("direction_sequence", [])
         direction_text = " -> ".join(directions) if directions else event.get("direction") or "?"
+        capture_retry = event.get("capture_retry")
+        if isinstance(capture_retry, dict):
+            attempt = capture_retry.get("attempt")
+            if attempt is not None:
+                self._append_event(
+                    f"Move {self.move_index}: confirmed on a later frame after {attempt} retry."
+                )
+                self._remember_issue(
+                    f"Move {self.move_index}: board read required {attempt} confirmation retry."
+                )
         repair = event.get("board_repair")
         if isinstance(repair, dict):
             repaired_cells = repair.get("repaired_cells") or []
@@ -1014,6 +1203,8 @@ class LiveTrackerEngine:
         bonus_values = cycle.bonus_values()
         bonus_cap = cycle.bonus_max_tile()
         locked_note = cycle.large_schedule_note()
+        safe_moves = cycle.safe_smalls_until_large_possible()
+        countdown_label = cycle.large_countdown_label()
         if self.last_snapshot is None:
             note = "Start tracking from a fresh game to compute exact cue odds after the visible tile is spent."
             return {
@@ -1025,6 +1216,8 @@ class LiveTrackerEngine:
                 "big_tile_percent": 0.0,
                 "big_tile_note": f"No exact big-tile odds until the tracker is seeded from a fresh game. {locked_note}",
                 "large_schedule_note": locked_note,
+                "big_tile_safe_moves": safe_moves,
+                "big_tile_countdown_label": countdown_label,
                 "bonus_cap": bonus_cap,
                 "max_tile": max_tile,
             }
@@ -1093,6 +1286,8 @@ class LiveTrackerEngine:
                 )
             note += f" Big-tile support runs from 6 to {bonus_cap}."
         schedule_note = cycle.large_schedule_note()
+        safe_moves = cycle.safe_smalls_until_large_possible()
+        countdown_label = cycle.large_countdown_label()
         if large_prob <= 0:
             big_tile_note = schedule_note
         else:
@@ -1116,6 +1311,8 @@ class LiveTrackerEngine:
             "big_tile_percent": bonus_total,
             "big_tile_note": big_tile_note,
             "large_schedule_note": schedule_note,
+            "big_tile_safe_moves": safe_moves,
+            "big_tile_countdown_label": countdown_label,
             "bonus_cap": bonus_cap,
             "max_tile": max_tile,
         }
@@ -1165,6 +1362,8 @@ class LiveDebugApp:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.tracker: Optional[LiveTrackerEngine] = None
         self.session_dir: Optional[Path] = None
+        self.action_busy = False
+        self.action_message = "Ready."
 
     def _append_event(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -1185,10 +1384,13 @@ class LiveDebugApp:
             self.session_dir = self.recorder.session_dir
             self.tracker = LiveTrackerEngine(
                 self.recorder,
+                capture_backend=self.args.capture_backend,
                 attach_current_game=self.args.attach_current_game,
                 settle_frames=self.args.settle_frames,
                 settle_threshold=self.args.settle_threshold,
                 max_recovery_depth=self.args.max_recovery_depth,
+                recheck_attempts=self.args.recheck_attempts,
+                recheck_delay=self.args.recheck_delay,
             )
 
     def _refresh_window(self) -> None:
@@ -1220,6 +1422,47 @@ class LiveDebugApp:
     def _current_payload(self) -> Dict[str, object]:
         with self.lock:
             return dict(self.shared.payload)
+
+    def _set_action_status(self, *, busy: bool, message: str) -> None:
+        with self.lock:
+            self.action_busy = busy
+            self.action_message = message
+
+    def _action_payload(self) -> Dict[str, object]:
+        with self.lock:
+            return {
+                "busy": self.action_busy,
+                "message": self.action_message,
+            }
+
+    def _run_start_new_game_action(self) -> None:
+        try:
+            self._append_event("Dashboard action: starting a fresh Threes game.")
+            self._ensure_window()
+            if self.window_id is None:
+                raise RuntimeError("No iPhone Mirroring window is available.")
+            mc.start_new_game_anywhere_sequence(
+                self.window_id,
+                self.args.capture_backend,
+                focus_delay=ACTION_FOCUS_DELAY,
+                transition_delay=ACTION_TRANSITION_DELAY,
+                timeout=ACTION_TIMEOUT,
+                poll=ACTION_POLL,
+            )
+            self._append_event("Dashboard action completed: fresh game ready.")
+            self._set_action_status(busy=False, message="Fresh game ready.")
+        except Exception as exc:  # noqa: BLE001
+            self._append_event(f"Dashboard action failed: {exc}")
+            self._set_action_status(busy=False, message=f"Start-new-game failed: {exc}")
+
+    def trigger_start_new_game(self) -> tuple[bool, str]:
+        with self.lock:
+            if self.action_busy:
+                return False, self.action_message
+            self.action_busy = True
+            self.action_message = "Starting a fresh Threes game..."
+        Thread(target=self._run_start_new_game_action, daemon=True).start()
+        return True, "Starting a fresh Threes game..."
 
     def _state_json(self) -> bytes:
         with self.lock:
@@ -1298,6 +1541,7 @@ class LiveDebugApp:
                     "tracker": tracker_payload,
                     "issues": deduped_issues,
                     "recent_events": list(self.recent_events) + self.tracker.recent_events(),
+                    "actions": self._action_payload(),
                     "images": {
                         "full": "/frame/full.png",
                         "full_annotated": "/frame/full_annotated.png",
@@ -1339,6 +1583,7 @@ class LiveDebugApp:
                     },
                     "issues": [self.last_error],
                     "recent_events": list(self.recent_events),
+                    "actions": self._action_payload(),
                     "images": {
                         "full": "/frame/full.png",
                         "full_annotated": "/frame/full_annotated.png",
@@ -1395,6 +1640,20 @@ class LiveDebugApp:
                     self.send_no_cache()
                     self.end_headers()
                     self.wfile.write(data)
+                    return
+                self.send_error(404, "Not found")
+
+            def do_POST(self) -> None:
+                path = self.path.split("?", 1)[0]
+                if path == "/api/action/start_new_game":
+                    accepted, message = app.trigger_start_new_game()
+                    body = json.dumps({"ok": accepted, "message": message}).encode("utf-8")
+                    self.send_response(202 if accepted else 409)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_no_cache()
+                    self.end_headers()
+                    self.wfile.write(body)
                     return
                 self.send_error(404, "Not found")
 

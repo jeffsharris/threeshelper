@@ -26,6 +26,14 @@ SCENE_END_CONFIRM = "end_confirm"
 SCENE_PHONE_IN_USE = "phone_in_use"
 SCENE_UNKNOWN = "unknown"
 SCENE_SCREEN_OFF = "screen_off"
+THREES_SCENES = (
+    SCENE_GAME,
+    SCENE_TITLE,
+    SCENE_GAME_OVER,
+    SCENE_POSTGAME,
+    SCENE_MENU,
+    SCENE_END_CONFIRM,
+)
 TITLE_PLAY_TAP = (0.50, 0.78)
 POSTGAME_RETRY_TAP = (0.16, 0.145)
 INGAME_MENU_TAP = (0.16, 0.15)
@@ -37,6 +45,19 @@ ENDGAME_SUMMARY_SWIPE_DURATION = 0.08
 ENDGAME_SUMMARY_SWIPE_STEPS = 8
 ENDGAME_SUMMARY_START_REL_X = 0.50
 ENDGAME_SUMMARY_START_REL_Y = 0.55
+HOME_SWIPE_SPAN_RATIO = 0.18
+HOME_SWIPE_DURATION = 0.05
+HOME_SWIPE_STEPS = 6
+HOME_SWIPE_START_REL_X = 0.50
+HOME_SWIPE_START_REL_Y = 0.93
+HOME_SEARCH_SPAN_RATIO = 0.20
+HOME_SEARCH_DURATION = 0.06
+HOME_SEARCH_STEPS = 8
+HOME_SEARCH_START_REL_X = 0.50
+HOME_SEARCH_START_REL_Y = 0.22
+HOME_SEARCH_FIELD_TAP = (0.50, 0.16)
+RETURN_KEYCODE = 36
+DELETE_KEYCODE = 51
 SCENE_REF_DIR = Path(__file__).with_name("scene_refs")
 SCENE_MATCH_THRESHOLD = {
     SCENE_TITLE: 0.01,
@@ -574,6 +595,44 @@ def _post_mouse(event_type: int, point: Tuple[float, float]) -> None:
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
+def _send_keycode(keycode: int) -> None:
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            f'tell application "System Events" to key code {int(keycode)}',
+        ],
+        check=True,
+    )
+
+
+def _send_text(text: str) -> None:
+    safe = text.replace("\\", "\\\\").replace('"', '\\"')
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            f'tell application "System Events" to keystroke "{safe}"',
+        ],
+        check=True,
+    )
+
+
+def clear_text_field(backspaces: int = 16) -> None:
+    for _ in range(max(0, backspaces)):
+        _send_keycode(DELETE_KEYCODE)
+        time.sleep(0.01)
+
+
+def press_return() -> None:
+    _send_keycode(RETURN_KEYCODE)
+
+
+def type_text(text: str) -> None:
+    if text:
+        _send_text(text)
+
+
 def tap_window(
     window_id: int,
     rel_x: float,
@@ -656,6 +715,64 @@ def tap_main_menu(window_id: int, focus_delay: float) -> None:
 
 def confirm_end_game(window_id: int, focus_delay: float) -> None:
     tap_window(window_id, END_CONFIRM_END_GAME_TAP[0], END_CONFIRM_END_GAME_TAP[1], focus_delay)
+
+
+def go_home(window_id: int, focus_delay: float) -> None:
+    drag_window(
+        window_id,
+        "up",
+        span_ratio=HOME_SWIPE_SPAN_RATIO,
+        duration=HOME_SWIPE_DURATION,
+        steps=HOME_SWIPE_STEPS,
+        start_rel_x=HOME_SWIPE_START_REL_X,
+        start_rel_y=HOME_SWIPE_START_REL_Y,
+        focus_delay=focus_delay,
+    )
+
+
+def open_home_search(window_id: int, focus_delay: float) -> None:
+    drag_window(
+        window_id,
+        "down",
+        span_ratio=HOME_SEARCH_SPAN_RATIO,
+        duration=HOME_SEARCH_DURATION,
+        steps=HOME_SEARCH_STEPS,
+        start_rel_x=HOME_SEARCH_START_REL_X,
+        start_rel_y=HOME_SEARCH_START_REL_Y,
+        focus_delay=focus_delay,
+    )
+    time.sleep(0.15)
+    tap_window(window_id, HOME_SEARCH_FIELD_TAP[0], HOME_SEARCH_FIELD_TAP[1], 0.0)
+
+
+def launch_threes_from_search(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+    query: str = "Threes",
+) -> ScreenState:
+    activate_mirroring()
+    time.sleep(focus_delay)
+    go_home(window_id, 0.0)
+    time.sleep(transition_delay)
+    open_home_search(window_id, 0.0)
+    time.sleep(transition_delay)
+    activate_mirroring()
+    time.sleep(focus_delay)
+    clear_text_field()
+    type_text(query)
+    time.sleep(0.15)
+    press_return()
+    return wait_for_scene(
+        window_id,
+        backend,
+        THREES_SCENES,
+        timeout=timeout,
+        poll=poll,
+    )
 
 
 def start_game_sequence(
@@ -825,6 +942,48 @@ def ensure_game_scene(
             poll=poll,
         )
     raise RuntimeError(f"Cannot ensure game from scene {state.scene!r}")
+
+
+def start_new_game_anywhere_sequence(
+    window_id: int,
+    backend: str,
+    focus_delay: float,
+    transition_delay: float,
+    timeout: float,
+    poll: float,
+) -> ScreenState:
+    state = capture_screen_state(window_id, backend)
+    if state.scene in (SCENE_SCREEN_OFF, SCENE_PHONE_IN_USE):
+        _raise_for_unready_scene(state.scene)
+
+    if state.scene not in THREES_SCENES:
+        state = launch_threes_from_search(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+
+    if state.scene != SCENE_TITLE:
+        state = ensure_title_scene(
+            window_id,
+            backend,
+            focus_delay=focus_delay,
+            transition_delay=transition_delay,
+            timeout=timeout,
+            poll=poll,
+        )
+
+    return start_game_sequence(
+        window_id,
+        backend,
+        focus_delay=focus_delay,
+        transition_delay=transition_delay,
+        timeout=timeout,
+        poll=poll,
+    )
 
 
 def drag_window(

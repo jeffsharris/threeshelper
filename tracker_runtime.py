@@ -139,7 +139,7 @@ def build_move_event(
         before_frame.preview_label,
         after_frame.board,
         gray_cells=gray_cells,
-        max_gray_mismatches=1,
+        max_gray_mismatches=2,
     )
     if repair is not None:
         repaired_board = repair.step.after_board
@@ -158,6 +158,7 @@ def build_move_event(
             "mismatch_positions": [list(pos) for pos in repair.mismatch_positions],
             "repaired_cells": repair.repaired_cells,
             "support_score": repair.support_score,
+            "support_margin": repair.support_margin,
             "observed_after_board": after_frame.board,
             "resolved_after_board": repaired_board,
         }

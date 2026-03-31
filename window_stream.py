@@ -152,6 +152,32 @@ class TileCycle:
         remaining_slots = max(1, LARGE_SPAN_SMALLS + 1 - self.span_small_pos)
         return 1.0 / remaining_slots
 
+    def safe_smalls_until_large_possible(self) -> Optional[int]:
+        """
+        Return how many guaranteed small previews remain before a large preview
+        could next appear.
+
+        `0` means the next preview can already be a large bundle. `None` means
+        large previews are still structurally impossible because the board has
+        not yet reached the 48+ threshold.
+        """
+        if self.max_tile < BONUS_TRIGGER_TILE:
+            return None
+        if self.small_seen_total < LARGE_DELAY_PREVIEWS:
+            return max(0, LARGE_DELAY_PREVIEWS - self.small_seen_total)
+        if self.large_pending:
+            return 0
+        return max(0, LARGE_SPAN_SMALLS - self.span_small_pos)
+
+    def large_countdown_label(self) -> str:
+        safe_smalls = self.safe_smalls_until_large_possible()
+        if safe_smalls is None:
+            return f"Needs a {BONUS_TRIGGER_TILE} tile"
+        if safe_smalls == 0:
+            return "Live now"
+        plural = "move" if safe_smalls == 1 else "moves"
+        return f"Safe for {safe_smalls} {plural}"
+
     def bonus_max_tile(self) -> int:
         """
         Largest big tile currently allowed by the board state.
@@ -205,13 +231,13 @@ class TileCycle:
         return {value: count / total_slots for value, count in hits.items() if count > 0}
 
     def large_schedule_note(self) -> str:
-        if self.max_tile < BONUS_TRIGGER_TILE:
+        safe_smalls = self.safe_smalls_until_large_possible()
+        if safe_smalls is None:
             return f"Big tiles stay locked until a {BONUS_TRIGGER_TILE} tile is on the board."
         if self.small_seen_total < LARGE_DELAY_PREVIEWS:
-            remaining = LARGE_DELAY_PREVIEWS - self.small_seen_total
-            plural = "preview" if remaining == 1 else "previews"
-            verb = "remains" if remaining == 1 else "remain"
-            return f"Big tiles unlock after {LARGE_DELAY_PREVIEWS} small previews. {remaining} {plural} {verb}."
+            plural = "preview" if safe_smalls == 1 else "previews"
+            verb = "remains" if safe_smalls == 1 else "remain"
+            return f"Big tiles unlock after {LARGE_DELAY_PREVIEWS} small previews. {safe_smalls} {plural} {verb}."
         if self.large_pending:
             remaining_slots = max(1, LARGE_SPAN_SMALLS + 1 - self.span_small_pos)
             return f"One big-tile bundle is still pending in the current {LARGE_SPAN_SMALLS}-small span ({remaining_slots} preview slots left)."
@@ -1104,6 +1130,7 @@ def _board_layout_cache_key(
 ) -> Tuple[
     int,
     int,
+    bytes,
     Optional[Tuple[Tuple[float, ...], Tuple[float, ...], Tuple[float, ...], Tuple[float, ...]]],
 ]:
     calibration = load_board_grid_calibration()
@@ -1120,7 +1147,8 @@ def _board_layout_cache_key(
         except Exception:
             signature = None
     h, w, _ = roi.shape
-    return (h, w, signature)
+    thumb = Image.fromarray(roi).convert("L").resize((12, 12), Image.BILINEAR)
+    return (h, w, thumb.tobytes(), signature)
 
 
 def _fallback_board_cell_outer_boxes(

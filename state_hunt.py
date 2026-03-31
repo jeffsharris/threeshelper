@@ -47,6 +47,7 @@ class TransitionRepair:
     mismatch_positions: List[Tuple[int, int]]
     repaired_cells: List[Dict[str, object]]
     support_score: float
+    support_margin: float
 
 
 def _json_safe(value):
@@ -382,7 +383,7 @@ def find_single_step_gray_repair(
     before_preview: str,
     observed_after_board: Sequence[Sequence[str]],
     gray_cells: Optional[Dict[Tuple[int, int], np.ndarray]] = None,
-    max_gray_mismatches: int = 1,
+    max_gray_mismatches: int = 2,
 ) -> Optional[TransitionRepair]:
     """
     Look for a unique legal one-step result that differs only by a small number of
@@ -398,6 +399,7 @@ def find_single_step_gray_repair(
         mismatch_positions: List[Tuple[int, int]] = []
         repaired_cells: List[Dict[str, object]] = []
         support_score = 0.0
+        support_margin = 0.0
         valid = True
 
         for r in range(4):
@@ -422,6 +424,7 @@ def find_single_step_gray_repair(
                         valid = False
                         break
                     support_score += float(expected_score)
+                    support_margin += float(expected_score) - float(observed_score or 0.0)
                 repaired_cells.append(
                     {
                         "row": r,
@@ -442,18 +445,37 @@ def find_single_step_gray_repair(
                     mismatch_positions=mismatch_positions,
                     repaired_cells=repaired_cells,
                     support_score=support_score,
+                    support_margin=support_margin,
                 )
             )
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: (len(item.mismatch_positions), -item.support_score))
-    best_count = len(candidates[0].mismatch_positions)
-    best_group = [item for item in candidates if len(item.mismatch_positions) == best_count]
-    if len(best_group) != 1:
-        return None
-    return best_group[0]
+    candidates.sort(
+        key=lambda item: (
+            len(item.mismatch_positions),
+            -item.support_margin,
+            -item.support_score,
+        )
+    )
+    best = candidates[0]
+    if len(candidates) == 1:
+        return best
+
+    runner_up = candidates[1]
+    if len(best.mismatch_positions) != len(runner_up.mismatch_positions):
+        return best
+    if best.support_margin > runner_up.support_margin + 0.02:
+        return best
+    if (
+        abs(best.support_margin - runner_up.support_margin) <= 0.02
+        and best.support_score > runner_up.support_score + 0.02
+    ):
+        return best
+    if best.step.after_board == runner_up.step.after_board:
+        return best
+    return None
 
 
 def find_transition_paths(

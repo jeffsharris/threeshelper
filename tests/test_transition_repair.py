@@ -58,6 +58,38 @@ class TransitionRepairTests(unittest.TestCase):
         self.assertEqual(repair.step.after_board[0][1], "96")
         self.assertEqual(repair.mismatch_positions, [(0, 1)])
 
+    def test_unique_gray_repair_recovers_move47(self):
+        blue = ws.SMALL_COLOR_MAP["blue"]
+        red = ws.SMALL_COLOR_MAP["red"]
+        before_board = [
+            ["1536", "48", "24", "6"],
+            [red, "48", "24", "3"],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, "6", blue],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, "3"],
+        ]
+        observed_after_board = [
+            ["1536", "48", "48", "6"],
+            [red, ws.TOKEN_EMPTY, "6", "3"],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, blue],
+            [ws.TOKEN_EMPTY, ws.TOKEN_EMPTY, blue, "3"],
+        ]
+        gray_cells = self._gray_cells_from_board_fixture("move47_after_board.png")
+
+        repair = sh.find_single_step_gray_repair(
+            before_board,
+            "blue",
+            observed_after_board,
+            gray_cells=gray_cells,
+            max_gray_mismatches=2,
+        )
+
+        self.assertIsNotNone(repair)
+        assert repair is not None
+        self.assertEqual(repair.step.direction, "up")
+        self.assertEqual(repair.step.after_board[0][1], "96")
+        self.assertEqual(repair.step.inserted_pos, (3, 2))
+        self.assertEqual(repair.mismatch_positions, [(0, 1)])
+
 
 if __name__ == "__main__":
     unittest.main()
