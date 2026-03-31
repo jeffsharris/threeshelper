@@ -72,24 +72,17 @@ DASHBOARD_HTML = """<!doctype html>
     .layout {
       max-width: 1500px;
       margin: 0 auto;
-      padding: 8px 24px 24px;
+      padding: 8px 24px 20px;
       display: grid;
       grid-template-columns: minmax(420px, 1.05fr) minmax(420px, 0.95fr);
       gap: 18px;
       align-items: start;
     }
-    .stack {
-      display: grid;
-      gap: 18px;
-    }
-    .span-2 {
-      grid-column: 1 / -1;
-    }
     .panel {
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 24px;
-      padding: 18px;
+      padding: 16px;
       box-shadow: 0 18px 60px rgba(0, 0, 0, 0.24);
     }
     .panel.alt {
@@ -129,13 +122,13 @@ DASHBOARD_HTML = """<!doctype html>
       overflow: hidden;
       border: 1px solid var(--border);
       background: #0a0d13;
-      min-height: 220px;
+      min-height: 180px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
     .screen-phone {
-      width: min(100%, 430px);
+      width: min(100%, 300px);
       margin: 0 auto;
     }
     img {
@@ -183,9 +176,9 @@ DASHBOARD_HTML = """<!doctype html>
     .board-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(56px, 1fr));
-      gap: 10px;
+      gap: 8px;
       margin-top: 12px;
-      max-width: 520px;
+      max-width: 460px;
     }
     .tile {
       aspect-ratio: 0.84;
@@ -194,7 +187,7 @@ DASHBOARD_HTML = """<!doctype html>
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: clamp(22px, 3.2vw, 34px);
+      font-size: clamp(20px, 3vw, 32px);
       font-weight: 700;
       letter-spacing: -0.04em;
       box-shadow: inset 0 -7px 0 rgba(0, 0, 0, 0.18);
@@ -217,25 +210,33 @@ DASHBOARD_HTML = """<!doctype html>
       color: #fff;
     }
     .tile.mini {
+      width: 30px;
+      min-width: 30px;
+      aspect-ratio: 0.76;
+      border-radius: 8px;
+      font-size: 14px;
+      box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.18);
+    }
+    .tile.slot {
+      width: 15px;
+      min-width: 15px;
+      aspect-ratio: 0.76;
+      border-radius: 4px;
+      font-size: 8px;
+      box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+    }
+    .tile.cue {
       width: 38px;
       min-width: 38px;
       aspect-ratio: 0.76;
       border-radius: 10px;
-      font-size: 18px;
-      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.18);
-    }
-    .tile.cue {
-      width: 46px;
-      min-width: 46px;
-      aspect-ratio: 0.76;
-      border-radius: 12px;
-      font-size: 21px;
-      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.18);
+      font-size: 17px;
+      box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.18);
     }
     .next-compact {
-      min-width: 152px;
-      padding: 10px 12px;
-      border-radius: 18px;
+      min-width: 132px;
+      padding: 8px 10px;
+      border-radius: 16px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       background: rgba(255, 255, 255, 0.04);
     }
@@ -248,112 +249,61 @@ DASHBOARD_HTML = """<!doctype html>
     .observed-value {
       display: flex;
       justify-content: flex-start;
-      gap: 8px;
-      min-height: 52px;
+      gap: 6px;
+      min-height: 42px;
       align-items: center;
-      margin: 8px 0 6px;
+      margin: 6px 0 4px;
     }
     .next-compact-note {
       color: var(--muted);
-      font-size: 11px;
-      line-height: 1.45;
+      font-size: 10px;
+      line-height: 1.35;
     }
-    .probs {
-      display: grid;
-      gap: 10px;
+    .odds-group + .odds-group {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
     }
-    .bag-grid {
-      display: grid;
+    .odds-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
       gap: 12px;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }
-    .bag-chip {
-      border-radius: 18px;
+    .aggregate-badge {
+      color: var(--good);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .odds-list {
+      display: grid;
+      gap: 8px;
+    }
+    .odds-row {
+      display: grid;
+      grid-template-columns: 34px 34px 1fr 48px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }
+    .slot-grid {
+      width: 34px;
+      min-width: 34px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 3px;
+    }
+    .slot-grid.empty {
+      opacity: 0.18;
+    }
+    .slot-cell {
+      width: 15px;
+      height: 15px;
+      border-radius: 4px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       background: rgba(255, 255, 255, 0.04);
-      padding: 12px;
-      display: grid;
-      gap: 12px;
-    }
-    .bag-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-    }
-    .bag-title {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .bag-tiles {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      flex-wrap: wrap;
-      min-height: 38px;
-    }
-    .bag-empty {
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.45;
-    }
-    .bag-prob {
-      text-align: right;
-      font-size: 20px;
-      font-weight: 700;
-      line-height: 1;
-    }
-    .bag-prob-label {
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.3;
-      text-align: right;
-    }
-    .big-callout {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      padding: 14px 16px;
-      border-radius: 18px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      background:
-        linear-gradient(90deg, rgba(134, 199, 255, 0.10), rgba(131, 229, 155, 0.06)),
-        rgba(255, 255, 255, 0.03);
-      margin-bottom: 14px;
-    }
-    .big-callout-value {
-      font-size: 28px;
-      font-weight: 700;
-      line-height: 1;
-    }
-    .prob-columns {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 18px;
-    }
-    .prob-card {
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
-      padding-top: 14px;
-    }
-    .prob-card:first-of-type {
-      border-top: none;
-      padding-top: 0;
-    }
-    .prob-row {
-      display: grid;
-      grid-template-columns: 72px 1fr 56px;
-      gap: 10px;
-      align-items: center;
-      font-size: 13px;
-    }
-    .prob-section-title {
-      color: var(--muted);
-      font-size: 11px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin: 6px 0 2px;
     }
     .prob-tile {
       display: flex;
@@ -376,42 +326,7 @@ DASHBOARD_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
       line-height: 1.6;
-      margin-top: 12px;
-    }
-    .bundle-wrap {
-      display: grid;
-      gap: 10px;
-      margin-top: 14px;
-    }
-    .bundle-label {
-      color: var(--muted);
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .bundle-grid {
-      display: grid;
-      gap: 8px;
-    }
-    .bundle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(255, 255, 255, 0.03);
-    }
-    .bundle-tiles {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-    }
-    .bundle-meta {
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
+      margin-top: 8px;
     }
     .issues.ok {
       color: var(--good);
@@ -419,9 +334,6 @@ DASHBOARD_HTML = """<!doctype html>
     @media (max-width: 1180px) {
       .layout {
         grid-template-columns: 1fr;
-      }
-      .span-2 {
-        grid-column: auto;
       }
     }
     @media (max-width: 720px) {
@@ -431,9 +343,6 @@ DASHBOARD_HTML = """<!doctype html>
       }
       .board-grid {
         gap: 8px;
-      }
-      .bag-grid {
-        grid-template-columns: 1fr;
       }
       .tile {
         font-size: 28px;
@@ -469,24 +378,22 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="subtle">
         After the visible cue is spent, this is the next-cue distribution from the remaining 12-tile bag plus any enabled big-tile bundles.
       </div>
-      <div class="prob-columns">
-        <div class="prob-card">
-          <div class="label">Small Tile Bag</div>
-          <div class="bag-grid" id="bagGrid"></div>
-        </div>
-        <div class="prob-card">
-          <div class="label">Big Tile Chance</div>
-          <div class="big-callout" id="bigProbability"></div>
-        </div>
-        <div class="prob-card">
+      <div class="odds-group">
+        <div class="odds-header">
           <div class="label">Tile Odds After The Visible Cue</div>
-          <div class="probs" id="probabilities"></div>
-          <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
-          <div class="bundle-wrap" id="bonusBundles"></div>
         </div>
+        <div class="odds-list" id="smallProbabilities"></div>
+      </div>
+      <div class="odds-group">
+        <div class="odds-header">
+          <div class="label">Big Tile Chances</div>
+          <div class="aggregate-badge" id="bigProbability"></div>
+        </div>
+        <div class="odds-list" id="bigProbabilities"></div>
+        <div class="prob-note" id="probabilitiesNote">Waiting for probability model...</div>
       </div>
     </section>
-    <section class="panel span-2">
+    <section class="panel">
       <h2>Current Screen</h2>
       <div class="chips" id="chips"></div>
       <div class="image-wrap">
@@ -512,7 +419,7 @@ DASHBOARD_HTML = """<!doctype html>
       <h2>Issues</h2>
       <pre id="issues" class="issues ok">No issues recorded.</pre>
     </section>
-    <section class="panel span-2">
+    <section class="panel">
       <h2>Session</h2>
       <pre id="sessionMeta">Loading...</pre>
     </section>
@@ -526,13 +433,12 @@ DASHBOARD_HTML = """<!doctype html>
     const latestEventNode = document.getElementById("latestEvent");
     const issuesNode = document.getElementById("issues");
     const sessionMetaNode = document.getElementById("sessionMeta");
-    const bagGridNode = document.getElementById("bagGrid");
+    const smallProbabilitiesNode = document.getElementById("smallProbabilities");
+    const bigProbabilitiesNode = document.getElementById("bigProbabilities");
     const bigProbabilityNode = document.getElementById("bigProbability");
     const observedPreviewNode = document.getElementById("observedPreview");
     const observedPreviewNoteNode = document.getElementById("observedPreviewNote");
-    const probabilitiesNode = document.getElementById("probabilities");
     const probabilitiesNoteNode = document.getElementById("probabilitiesNote");
-    const bonusBundlesNode = document.getElementById("bonusBundles");
     const fullImageNode = document.getElementById("fullImage");
     const fullPlaceholderNode = document.getElementById("fullPlaceholder");
 
@@ -643,95 +549,58 @@ DASHBOARD_HTML = """<!doctype html>
       observedPreviewNoteNode.textContent = (preview && preview.note) ? preview.note : "No preview data available.";
     }
 
-    function renderBag(expected) {
-      const smallBag = expected && expected.small_bag ? expected.small_bag : [];
-      if (!smallBag.length) {
-        bagGridNode.innerHTML = "";
-        return;
-      }
-      const chips = smallBag.map((item) => {
-        const tiles = Array.from({ length: item.remaining || 0 }, () => tileMarkup(tileInfoForValue(item.value), "mini")).join("");
-        return [
-          `<div class="bag-chip">`,
-          `<div class="bag-top">`,
-          `<div class="bag-title">${tileMarkup(tileInfoForValue(item.value), "mini")}</div>`,
-          `<div>`,
-          `<div class="bag-prob">${(item.percent || 0).toFixed(1)}%</div>`,
-          `<div class="bag-prob-label">next-cue chance</div>`,
-          `</div>`,
-          `</div>`,
-          `<div class="bag-tiles">${tiles || `<div class="bag-empty">No tiles left in this bag.</div>`}</div>`,
-          `<div class="bag-sub">${item.remaining} of ${item.base} remaining in the current 12-tile bag.</div>`,
-          `</div>`
-        ].join("");
-      });
-      bagGridNode.innerHTML = chips.join("");
-    }
-
     function renderBigProbability(expected) {
       const percent = expected && expected.big_tile_percent ? expected.big_tile_percent : 0;
-      const note = expected && expected.big_tile_note ? expected.big_tile_note : "No big tiles are currently eligible.";
-      bigProbabilityNode.innerHTML = [
-        `<div>`,
-        `<div class="label">Any Big Block Next</div>`,
-        `<div class="big-callout-value">${percent.toFixed(1)}%</div>`,
-        `<div class="subtle">${note}</div>`,
-        `</div>`,
-      ].join("");
+      bigProbabilityNode.textContent = `Any big block next ${percent.toFixed(1)}%`;
     }
 
     function renderProbabilities(expected) {
       if (!expected || !expected.available) {
-        bagGridNode.innerHTML = "";
+        smallProbabilitiesNode.innerHTML = "";
+        bigProbabilitiesNode.innerHTML = "";
         bigProbabilityNode.innerHTML = "";
-        probabilitiesNode.innerHTML = "";
         probabilitiesNoteNode.textContent = (expected && expected.note) ? expected.note : "Probability model unavailable.";
-        bonusBundlesNode.innerHTML = "";
         return;
       }
-      renderBag(expected);
       renderBigProbability(expected);
-      const makeRow = (item) => {
+      const smallBag = new Map((expected.small_bag || []).map((item) => [item.value, item]));
+      const makeSlots = (item) => {
+        if (!item) {
+          return `<div class="slot-grid empty">${Array.from({ length: 4 }, () => '<div class="slot-cell"></div>').join("")}</div>`;
+        }
+        const filled = Math.max(0, Math.min(4, item.remaining || 0));
+        const filledMarkup = Array.from({ length: filled }, () => tileMarkup(tileInfoForValue(item.value), "slot")).join("");
+        const emptyMarkup = Array.from({ length: 4 - filled }, () => '<div class="slot-cell"></div>').join("");
+        return `<div class="slot-grid">${filledMarkup}${emptyMarkup}</div>`;
+      };
+      const makeRow = (item, slotItem) => {
         const width = Math.max(0, Math.min(100, item.percent || 0));
         const tile = tileMarkup(tileInfoForValue(item.value), "mini");
         return [
-          `<div class="prob-row">`,
+          `<div class="odds-row">`,
           `<div class="prob-tile">${tile}</div>`,
+          makeSlots(slotItem),
           `<div class="prob-bar"><div class="prob-fill" style="width:${width}%"></div></div>`,
           `<div>${width.toFixed(1)}%</div>`,
           `</div>`
         ].join("");
       };
       const items = expected.items || [];
-      const smallRows = items.filter((item) => (item.value || 0) <= 3).map(makeRow).join("");
-      const bigRows = items.filter((item) => (item.value || 0) > 3).map(makeRow).join("");
-      const sections = [];
-      if (smallRows) {
-        sections.push(`<div class="prob-section-title">Small Tile Odds</div>${smallRows}`);
-      }
-      if (bigRows) {
-        sections.push(`<div class="prob-section-title">Big Tile Odds</div>${bigRows}`);
-      }
-      probabilitiesNode.innerHTML = sections.join("");
+      const smallOrder = [3, 1, 2];
+      const smallRows = smallOrder
+        .map((value) => {
+          const item = items.find((entry) => entry.value === value);
+          if (!item) return "";
+          return makeRow(item, smallBag.get(value));
+        })
+        .join("");
+      const bigRows = items
+        .filter((item) => (item.value || 0) > 3)
+        .map((item) => makeRow(item, null))
+        .join("");
+      smallProbabilitiesNode.innerHTML = smallRows;
+      bigProbabilitiesNode.innerHTML = bigRows;
       probabilitiesNoteNode.textContent = expected.note || "";
-      const bundles = expected.bonus_bundles || [];
-      if (!bundles.length) {
-        bonusBundlesNode.innerHTML = "";
-        return;
-      }
-      const bundleRows = bundles.map((bundle) => {
-        const tiles = (bundle.values || []).map((value) => tileMarkup(tileInfoForValue(value), "mini")).join("");
-        return [
-          `<div class="bundle-row">`,
-          `<div class="bundle-tiles">${tiles}</div>`,
-          `<div class="bundle-meta">${(bundle.conditional_percent || 0).toFixed(1)}% of bonus cues</div>`,
-          `</div>`
-        ].join("");
-      });
-      bonusBundlesNode.innerHTML = [
-        `<div class="bundle-label">Bonus Bundles</div>`,
-        `<div class="bundle-grid">${bundleRows.join("")}</div>`,
-      ].join("");
     }
 
     function renderState(state) {
