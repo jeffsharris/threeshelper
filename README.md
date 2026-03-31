@@ -1,6 +1,19 @@
 Threes helper – preview detector
 ================================
 
+Environment
+-----------
+
+This repo now uses `uv` for Python environment management and applies a one-week package age gate via `uv.toml`.
+
+```bash
+cd /Users/jeffharris/code/threeshelper
+uv venv
+uv pip sync requirements.lock.txt
+```
+
+Run commands inside the activated environment or prefix them with `uv run`.
+
 What’s here
 -----------
 - `preview_detector.py`: screenshot-based detector for the “next tile” preview.

@@ -1,6 +1,7 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+.venv/
 
 out_tiles/
 tmp_*.png
