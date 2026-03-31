@@ -32,13 +32,31 @@ Game-model assumptions in code
 - Small-tile bag
   - Exactly 4 red, 4 blue, and 4 gray previews per 12 non-bonus inserts.
   - The bag resets after every 12 non-bonus inserts.
+- Move geometry
+  - Every move is one of `up/down/left/right`.
+  - Tiles move by one square at most.
+  - Legal merges are `1+2 -> 3` and identical `3+` tiles.
+  - A tile can merge at most once per move.
+  - The inserted tile lands in one of the eligible freed edge slots for the swipe direction, and those eligible slots are treated as equally likely.
 - Bonus tiles
   - Bonus tiles are only eligible once a 48 tile is visible on the board.
   - Candidate bonus values are derived from the current board max.
+  - Candidate values are grouped into equal-likelihood contiguous 3-value bundles.
+  - Once a bundle is chosen, each of its 3 tiles is equally likely.
   - Bonus probability is modeled independently from the small bag.
 - Tracking bootstrap
   - Fresh-game tracking is only seeded from a valid initial board.
   - If the current visible board is not a valid fresh start, tracking is disabled instead of inventing state.
+  - Mid-game attach is allowed only for plausible active boards: no unknown cells, not all empty, and still containing the mandatory 48+ anchor tile.
+
+Tracking and recovery behavior
+- `tracker_runtime.py` validates every observed move against the 4 legal swipe directions plus eligible spawn slots.
+- Gray-number repairs are legality-aware: they only resolve to a unique legal move candidate with sufficient raw classifier support.
+- `live_debug_server.py` keeps the normal path single-frame for responsiveness.
+- If a move would otherwise go invalid, the live tracker performs a short recapture/reconfirm loop before dropping state.
+- The dashboard `Start New Game` action uses:
+  - in-Threes path: exit current game -> title -> new game
+  - out-of-Threes path: home -> search `Threes` -> launch -> new game
 
 Operational notes
 - Generated debugging artifacts live under:

@@ -919,7 +919,7 @@ class LiveTrackerEngine:
         window_id: int,
     ) -> tuple[Optional[Dict[str, object]], Optional[mc.FrameState], int]:
         for attempt in range(1, self.recheck_attempts + 1):
-            time.sleep(self.recheck_delay)
+            time.sleep(self.recheck_delay * (2 ** (attempt - 1)))
             retry_state = mc.capture_screen_state(window_id, self.capture_backend)
             if retry_state.scene != mc.SCENE_GAME or retry_state.frame is None:
                 continue

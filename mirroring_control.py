@@ -56,6 +56,7 @@ HOME_SEARCH_STEPS = 8
 HOME_SEARCH_START_REL_X = 0.50
 HOME_SEARCH_START_REL_Y = 0.22
 HOME_SEARCH_FIELD_TAP = (0.50, 0.16)
+HOME_SEARCH_RESULT_TAP = (0.50, 0.27)
 RETURN_KEYCODE = 36
 DELETE_KEYCODE = 51
 SCENE_REF_DIR = Path(__file__).with_name("scene_refs")
@@ -748,25 +749,45 @@ def launch_threes_from_search(
     poll: float,
     query: str = "Threes",
 ) -> ScreenState:
-    activate_mirroring()
-    time.sleep(focus_delay)
-    go_home(window_id, 0.0)
-    time.sleep(transition_delay)
-    open_home_search(window_id, 0.0)
-    time.sleep(transition_delay)
-    activate_mirroring()
-    time.sleep(focus_delay)
-    clear_text_field()
-    type_text(query)
-    time.sleep(0.15)
-    press_return()
-    return wait_for_scene(
-        window_id,
-        backend,
-        THREES_SCENES,
-        timeout=timeout,
-        poll=poll,
-    )
+    last_error: Optional[Exception] = None
+    for _attempt in range(2):
+        activate_mirroring()
+        time.sleep(focus_delay)
+        go_home(window_id, 0.0)
+        time.sleep(transition_delay)
+        go_home(window_id, 0.0)
+        time.sleep(max(transition_delay * 0.5, 0.15))
+        open_home_search(window_id, 0.0)
+        time.sleep(transition_delay)
+        activate_mirroring()
+        time.sleep(focus_delay)
+        tap_window(window_id, HOME_SEARCH_FIELD_TAP[0], HOME_SEARCH_FIELD_TAP[1], 0.0)
+        clear_text_field()
+        type_text(query)
+        time.sleep(0.15)
+        press_return()
+        try:
+            return wait_for_scene(
+                window_id,
+                backend,
+                THREES_SCENES,
+                timeout=max(timeout * 0.5, 3.0),
+                poll=poll,
+            )
+        except RuntimeError as exc:
+            last_error = exc
+        tap_window(window_id, HOME_SEARCH_RESULT_TAP[0], HOME_SEARCH_RESULT_TAP[1], focus_delay)
+        try:
+            return wait_for_scene(
+                window_id,
+                backend,
+                THREES_SCENES,
+                timeout=max(timeout * 0.5, 3.0),
+                poll=poll,
+            )
+        except RuntimeError as exc:
+            last_error = exc
+    raise RuntimeError(f"Could not launch Threes from search: {last_error}")
 
 
 def start_game_sequence(

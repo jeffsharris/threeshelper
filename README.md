@@ -164,6 +164,12 @@ Useful notes:
 - Works against the live `iPhone Mirroring` window; the game does not need to exist as a local app target.
 - The driver now distinguishes `title`, `game`, `game_over`, `postgame`, `menu`, and `end_confirm` scenes before deciding which transition routine to run.
 - If the visible board does not look like a fresh game, tile-cycle probability tracking is disabled automatically and the script still plays.
+- Transition validation is legality-first:
+  - every move is one of `up/down/left/right`
+  - tiles shift by one square at most
+  - merges are only `1+2 -> 3` or identical `3+` tiles
+  - a tile merges at most once per move
+  - the inserted tile appears in one of the eligible freed edge slots for that swipe direction
 - `--start-game` waits for a valid fresh board before seeding the tracker.
 - `--retry-game` handles the full end-of-game path: `game_over -> swipe to summary -> Retry -> new game`.
 - `--exit-game` follows the full abort path: `menu -> MAIN MENU -> END GAME -> title`.
@@ -171,6 +177,11 @@ Useful notes:
 - `--capture-backend screencapture` is available if Quartz capture ever disagrees with what the detector should see.
 - `observe_human_game.py` waits for a real fresh board by default, validates each settled move, recovers short missed human sequences when possible, and records rewindable artifacts in `datasets/human_watch/`.
 - `hunt_invalid_states.py` uses the same validator and artifact format for autonomous repeated-play runs in `datasets/state_hunt/`.
+- `live_debug_server.py` keeps the fast path single-frame, but on an otherwise invalid move it performs a short recapture/reconfirm loop before dropping state.
+- Mid-game attach is guarded: the tracker will not attach to obviously bogus boards such as empty grids, unknown-cell reads, or boards missing the required 48+ anchor tile.
+- The dashboard `Start New Game` action now has two paths:
+  - inside Threes: exit current game and start fresh
+  - outside Threes: go home, search for `Threes`, launch it, then start fresh
 
 Gray tile labeling (build 3+ dataset):
 ```bash
