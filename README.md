@@ -133,7 +133,10 @@ python3 live_debug_server.py --attach-current-game
    - Continuously captures the mirrored phone, even when the app is not on a playable board.
    - Shows the live screen, parsed board state, visible next cue, following-cue probabilities, tracker state, issues, and recent events in one place.
    - Writes the latest live state into `datasets/live_debug/session_YYYYMMDD_HHMMSS/` so the current frame and JSON remain inspectable from the filesystem.
-   - Uses Quartz by default for sub-second refresh; override with `--capture-backend screencapture` if needed.
+   - Defaults to `--capture-backend screen`, which captures the visible on-screen region of the iPhone Mirroring window instead of the app window buffer.
+   - `screen` is the preferred live-debug backend when the mirrored phone is visible and unobscured; it materially reduces stale-frame latency compared with window-buffer capture.
+   - If the window is occluded or off-screen, fall back to `--capture-backend quartz` or `--capture-backend screencapture`.
+   - The live board panel now uses the fastest candidate board read immediately, while the tracker still waits for a legality-valid committed move before advancing internal state.
 
 Watch a human-played game from the next fresh board with a live dashboard:
 ```bash
@@ -154,6 +157,15 @@ python3 observe_human_game.py --no-open-dashboard
 python3 observe_human_game.py --max-recovery-depth 2
 python3 observe_human_game.py --max-games 3
 ```
+
+Latency benchmarking:
+```bash
+python3 benchmark_live_latency.py --mode direct --capture-backend screen --input-method arrow
+python3 benchmark_live_latency.py --mode server --server-url http://127.0.0.1:55777 --input-method arrow
+```
+   - `direct` measures the raw capture + legality path without the live server in the middle.
+   - `server` measures end-to-end dashboard/API latency against a running `live_debug_server.py`.
+   - For latency-sensitive control, `screen` capture plus arrow-key input is the best current path.
 
 Run repeated self-play and stop on the first tracked invalid state:
 ```bash
@@ -178,6 +190,7 @@ Useful notes:
 - `observe_human_game.py` waits for a real fresh board by default, validates each settled move, recovers short missed human sequences when possible, and records rewindable artifacts in `datasets/human_watch/`.
 - `hunt_invalid_states.py` uses the same validator and artifact format for autonomous repeated-play runs in `datasets/state_hunt/`.
 - `live_debug_server.py` keeps the fast path single-frame, but on an otherwise invalid move it performs a short recapture/reconfirm loop before dropping state.
+- `benchmark_live_latency.py` now waits for a genuinely settled board before each sample so latency numbers are not polluted by the previous move still animating.
 - Mid-game attach is guarded: the tracker will not attach to obviously bogus boards such as empty grids, unknown-cell reads, or boards missing the required 48+ anchor tile.
 - The dashboard `Start New Game` action now has two paths:
   - inside Threes: exit current game and start fresh

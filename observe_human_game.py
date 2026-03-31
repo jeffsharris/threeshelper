@@ -615,7 +615,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--capture-backend",
-        choices=("quartz", "screencapture"),
+        choices=("screen", "quartz", "screencapture"),
         default="quartz",
         help="Capture backend used for board/preview parsing.",
     )

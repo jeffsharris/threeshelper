@@ -59,6 +59,12 @@ HOME_SEARCH_FIELD_TAP = (0.50, 0.16)
 HOME_SEARCH_RESULT_TAP = (0.50, 0.27)
 RETURN_KEYCODE = 36
 DELETE_KEYCODE = 51
+ARROW_KEYCODES = {
+    "left": 123,
+    "right": 124,
+    "down": 125,
+    "up": 126,
+}
 SCENE_REF_DIR = Path(__file__).with_name("scene_refs")
 SCENE_MATCH_THRESHOLD = {
     SCENE_TITLE: 0.01,
@@ -283,6 +289,9 @@ class WindowBounds:
     def point(self, rel_x: float, rel_y: float) -> Tuple[float, float]:
         return (self.x + self.width * rel_x, self.y + self.height * rel_y)
 
+    def center(self) -> Tuple[float, float]:
+        return (self.x + self.width / 2.0, self.y + self.height / 2.0)
+
 
 @dataclass
 class FrameState:
@@ -319,6 +328,17 @@ def activate_mirroring() -> None:
     )
 
 
+def ensure_mirroring_active(window_id: Optional[int] = None) -> bool:
+    try:
+        front_window_id, owner, _title = ws.get_frontmost_window()
+        if owner == APP_NAME and (window_id is None or front_window_id == window_id):
+            return False
+    except Exception:
+        pass
+    activate_mirroring()
+    return True
+
+
 def get_window_bounds(window_id: int) -> WindowBounds:
     info = Quartz.CGWindowListCopyWindowInfo(
         Quartz.kCGWindowListOptionIncludingWindow,
@@ -338,6 +358,8 @@ def get_window_bounds(window_id: int) -> WindowBounds:
 
 
 def capture_window_image(window_id: int, backend: str) -> Image.Image:
+    if backend == "screen":
+        return capture_visible_window_region(window_id)
     if backend == "quartz":
         image = Quartz.CGWindowListCreateImage(
             Quartz.CGRectNull,
@@ -371,6 +393,51 @@ def capture_window_image(window_id: int, backend: str) -> Image.Image:
             Path(path).unlink()
         except OSError:
             pass
+
+
+def _display_for_window(bounds: WindowBounds) -> Tuple[int, Quartz.CGRect]:
+    err, displays, count = Quartz.CGGetActiveDisplayList(16, None, None)
+    if err != Quartz.kCGErrorSuccess or count <= 0:
+        raise RuntimeError("Could not enumerate active displays")
+    center_x, center_y = bounds.center()
+    for display_id in displays[:count]:
+        display_bounds = Quartz.CGDisplayBounds(display_id)
+        x0 = Quartz.CGRectGetMinX(display_bounds)
+        y0 = Quartz.CGRectGetMinY(display_bounds)
+        x1 = Quartz.CGRectGetMaxX(display_bounds)
+        y1 = Quartz.CGRectGetMaxY(display_bounds)
+        if x0 <= center_x < x1 and y0 <= center_y < y1:
+            return display_id, display_bounds
+    main_display = Quartz.CGMainDisplayID()
+    return main_display, Quartz.CGDisplayBounds(main_display)
+
+
+def capture_visible_window_region(window_id: int) -> Image.Image:
+    bounds = get_window_bounds(window_id)
+    display_id, display_bounds = _display_for_window(bounds)
+    local_rect = Quartz.CGRectMake(
+        bounds.x - Quartz.CGRectGetMinX(display_bounds),
+        bounds.y - Quartz.CGRectGetMinY(display_bounds),
+        bounds.width,
+        bounds.height,
+    )
+    image = Quartz.CGDisplayCreateImageForRect(display_id, local_rect)
+    if image is None:
+        raise RuntimeError("CGDisplayCreateImageForRect returned None")
+    width = Quartz.CGImageGetWidth(image)
+    height = Quartz.CGImageGetHeight(image)
+    bytes_per_row = Quartz.CGImageGetBytesPerRow(image)
+    data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(image))
+    buf = bytes(data)
+    return Image.frombuffer(
+        "RGBA",
+        (width, height),
+        buf,
+        "raw",
+        "BGRA",
+        bytes_per_row,
+        1,
+    ).convert("RGB")
 
 
 def _crop_from_rel_box(arr: np.ndarray, box: Tuple[float, float, float, float]) -> Image.Image:
@@ -591,14 +658,10 @@ def _post_mouse(event_type: int, point: Tuple[float, float]) -> None:
 
 
 def _send_keycode(keycode: int) -> None:
-    subprocess.run(
-        [
-            "osascript",
-            "-e",
-            f'tell application "System Events" to key code {int(keycode)}',
-        ],
-        check=True,
-    )
+    down = Quartz.CGEventCreateKeyboardEvent(None, int(keycode), True)
+    up = Quartz.CGEventCreateKeyboardEvent(None, int(keycode), False)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
 
 
 def _send_text(text: str) -> None:
@@ -628,14 +691,26 @@ def type_text(text: str) -> None:
         _send_text(text)
 
 
+def press_direction_key(
+    window_id: int,
+    direction: str,
+    focus_delay: float,
+) -> None:
+    if direction not in ARROW_KEYCODES:
+        raise ValueError(f"Unsupported direction: {direction}")
+    activated = ensure_mirroring_active(window_id)
+    time.sleep(focus_delay if activated else min(focus_delay, 0.01))
+    _send_keycode(ARROW_KEYCODES[direction])
+
+
 def tap_window(
     window_id: int,
     rel_x: float,
     rel_y: float,
     focus_delay: float,
 ) -> None:
-    activate_mirroring()
-    time.sleep(focus_delay)
+    activated = ensure_mirroring_active(window_id)
+    time.sleep(focus_delay if activated else min(focus_delay, 0.01))
     bounds = get_window_bounds(window_id)
     point = bounds.point(rel_x, rel_y)
     _post_mouse(Quartz.kCGEventMouseMoved, point)
@@ -1013,8 +1088,8 @@ def drag_window(
 ) -> None:
     if direction not in DIRECTIONS:
         raise ValueError(f"Unsupported direction: {direction}")
-    activate_mirroring()
-    time.sleep(focus_delay)
+    activated = ensure_mirroring_active(window_id)
+    time.sleep(focus_delay if activated else min(focus_delay, 0.01))
     bounds = get_window_bounds(window_id)
     start = bounds.point(start_rel_x, start_rel_y)
 
@@ -1313,8 +1388,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--capture-backend",
-        choices=("quartz", "screencapture"),
-        default="quartz",
+        choices=("screen", "quartz", "screencapture"),
+        default="screen",
         help="Capture backend used for board/preview parsing.",
     )
     parser.add_argument(

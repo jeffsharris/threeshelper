@@ -691,9 +691,13 @@ DASHBOARD_HTML = """<!doctype html>
       renderChips(state);
       trackerMetaNode.textContent = state.tracker.message || "Waiting for tracker state.";
       latestEventNode.textContent = state.tracker.latest_event_pretty || "No events yet.";
-      const board = state.tracker.board || state.detected.board;
+      const board = (state.tracker.run_state === "settling" && state.detected.board)
+        ? state.detected.board
+        : (state.tracker.board || state.detected.board);
       if (renderBoard(board)) {
-        boardSourceNode.textContent = state.scene === "game"
+        boardSourceNode.textContent = state.tracker.run_state === "settling" && state.detected.board
+          ? "Live parsed board while the tracker confirms the move."
+          : state.scene === "game"
           ? "Live parsed board from the mirrored game."
           : "Last tracked board before the current non-game scene.";
       } else {
@@ -724,11 +728,18 @@ DASHBOARD_HTML = """<!doctype html>
       );
     }
 
+    let refreshInflight = false;
     async function refresh() {
-      const response = await fetch("/api/state?ts=" + Date.now(), { cache: "no-store" });
-      if (!response.ok) throw new Error("Failed to load live state");
-      const state = await response.json();
-      renderState(state);
+      if (refreshInflight) return;
+      refreshInflight = true;
+      try {
+        const response = await fetch("/api/state?ts=" + Date.now(), { cache: "no-store" });
+        if (!response.ok) throw new Error("Failed to load live state");
+        const state = await response.json();
+        renderState(state);
+      } finally {
+        refreshInflight = false;
+      }
     }
 
     refresh().catch((error) => {
@@ -738,7 +749,7 @@ DASHBOARD_HTML = """<!doctype html>
     startNewGameButtonNode.addEventListener("click", () => {
       triggerStartNewGame().catch(() => {});
     });
-    setInterval(() => refresh().catch(() => {}), 150);
+    setInterval(() => refresh().catch(() => {}), 45);
   </script>
 </body>
 </html>
@@ -755,8 +766,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--capture-backend",
-        choices=("quartz", "screencapture"),
-        default="quartz",
+        choices=("screen", "quartz", "screencapture"),
+        default="screen",
         help="Capture backend used for live parsing.",
     )
     parser.add_argument(
@@ -767,7 +778,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host.")
     parser.add_argument("--port", type=int, default=55777, help="HTTP bind port.")
-    parser.add_argument("--poll", type=float, default=0.18, help="Capture loop interval in seconds.")
+    parser.add_argument("--poll", type=float, default=0.15, help="Idle capture loop interval in seconds.")
+    parser.add_argument(
+        "--game-poll",
+        type=float,
+        default=0.06,
+        help="Capture loop interval while a game board is visible and tracking is stable.",
+    )
+    parser.add_argument(
+        "--active-poll",
+        type=float,
+        default=0.04,
+        help="Capture loop interval while a move is settling or an action is in flight.",
+    )
     parser.add_argument("--settle-frames", type=int, default=2, help="Stable-frame count before accepting a move.")
     parser.add_argument("--settle-threshold", type=float, default=0.15, help="Board signature delta threshold.")
     parser.add_argument(
@@ -805,6 +828,8 @@ def _png_bytes(image: Image.Image) -> bytes:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
+
+
 def draw_full_annotated(
     state: mc.ScreenState,
     display_frame: Optional[mc.FrameState],
@@ -823,6 +848,7 @@ class LiveImages:
 class SharedState:
     revision: int = 0
     payload: Dict[str, object] = field(default_factory=dict)
+    payload_json: bytes = b"{}"
     images: LiveImages = field(default_factory=LiveImages)
 
 
@@ -864,6 +890,14 @@ class LiveTrackerEngine:
         self.failure_reasons: List[str] = []
         self.latest_event: Optional[Dict[str, object]] = None
         self.end_scene_active = False
+        self._cached_board_payload_key: Optional[tuple] = None
+        self._cached_rendered_board: Optional[str] = None
+        self._cached_probability_key: Optional[tuple] = None
+        self._cached_probability_payload: Optional[Dict[str, object]] = None
+        self._cached_observed_preview_key: Optional[tuple] = None
+        self._cached_observed_preview_payload: Optional[Dict[str, object]] = None
+        self._cached_latest_event_ref: Optional[Dict[str, object]] = None
+        self._cached_latest_event_pretty: Optional[str] = None
 
     def _append_event(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -949,10 +983,108 @@ class LiveTrackerEngine:
             return retry_event, retry_frame, attempt
         return None, None, 0
 
+    def _commit_transition_event(
+        self,
+        *,
+        state: mc.ScreenState,
+        final_frame: mc.FrameState,
+        final_ts_event: float,
+        event: Dict[str, object],
+        window_id: Optional[int],
+        move_index_start: int,
+        fast_confirmed: bool,
+    ) -> None:
+        capture_id = self.last_capture_id or 0
+        if window_id is not None:
+            capture_id = self.recorder.record_game_state(
+                final_frame,
+                window_id,
+                final_ts_event,
+                async_write=True,
+            )
+        event["after_capture_id"] = capture_id
+        self.move_index += int(event.get("step_count", 1))
+        event["move_index"] = self.move_index
+        if fast_confirmed:
+            event["fast_confirmed"] = True
+        self.recorder.append_event(event)
+        self.latest_event = event
+
+        failure_reasons = self._event_failure_reasons(event)
+        if failure_reasons:
+            self.failure_reasons = failure_reasons
+            if window_id is not None:
+                scene_path = self.recorder.record_scene(
+                    state,
+                    f"failure_game{self.game_index:03d}_move{self.move_index:04d}",
+                    extra=event,
+                )
+                self.recorder.append_failure(
+                    {
+                        "game_index": self.game_index,
+                        "move_index": self.move_index,
+                        "reasons": failure_reasons,
+                        "scene_capture": scene_path,
+                        "event": event,
+                    }
+                )
+            self.run_state = "failure"
+            self.message = "Invalid tracked state detected. Re-seeding from the current board."
+            self._append_event(f"Invalid state at move {self.move_index}: {'; '.join(failure_reasons)}")
+            self._remember_issue(f"Move {self.move_index}: {'; '.join(failure_reasons)}")
+            self.tracked = False
+            self.last_stable_frame = None
+            self.last_snapshot = None
+            self.stable_state = None
+            self.stable_count = 0
+            return
+
+        next_snapshot = event["preview_check"].get("next_snapshot")
+        self.last_snapshot = next_snapshot if isinstance(next_snapshot, tuple) else next_snapshot
+        self.last_stable_frame = frame_with_board(final_frame, event.get("after_board"))
+        self.last_capture_id = capture_id
+        self.stable_state = self.last_stable_frame
+        self.stable_count = 1
+        self.run_state = "tracking"
+        self.message = "Tracking live game state."
+        directions = event.get("direction_sequence", [])
+        direction_text = " -> ".join(directions) if directions else event.get("direction") or "?"
+        capture_retry = event.get("capture_retry")
+        if isinstance(capture_retry, dict):
+            attempt = capture_retry.get("attempt")
+            if attempt is not None:
+                self._append_event(
+                    f"Move {self.move_index}: confirmed on a later frame after {attempt} retry."
+                )
+                self._remember_issue(
+                    f"Move {self.move_index}: board read required {attempt} confirmation retry."
+                )
+        repair = event.get("board_repair")
+        if isinstance(repair, dict):
+            repaired_cells = repair.get("repaired_cells") or []
+            cell_text = ", ".join(
+                f"({cell['row']},{cell['col']}): {cell['observed']} -> {cell['expected']}"
+                for cell in repaired_cells
+                if isinstance(cell, dict)
+            )
+            if cell_text:
+                self._append_event(f"Repaired board read at move {self.move_index}: {cell_text}")
+                self._remember_issue(f"Move {self.move_index}: repaired board read ({cell_text})")
+        if fast_confirmed:
+            self._append_event(f"Move {self.move_index}: {direction_text} (fast confirm)")
+        elif event.get("recovered_missed_moves", 0) > 0:
+            self._append_event(
+                f"Moves {move_index_start}-{self.move_index}: {direction_text} "
+                f"(recovered {event['recovered_missed_moves']} skipped state)"
+            )
+        else:
+            self._append_event(f"Move {self.move_index}: {direction_text}")
+
     def observe(self, state: mc.ScreenState, window_id: Optional[int], ts_event: float) -> None:
         self.failure_reasons = []
         if state.scene not in (mc.SCENE_GAME_OVER, mc.SCENE_POSTGAME):
             self.end_scene_active = False
+        candidate_frame = state.frame or state.candidate_frame
 
         if state.scene in (mc.SCENE_SCREEN_OFF, mc.SCENE_PHONE_IN_USE):
             self.run_state = "waiting_for_device"
@@ -990,7 +1122,39 @@ class LiveTrackerEngine:
                 self._reset_tracking(new_game=True)
             return
 
+        if candidate_frame is not None:
+            self.last_visible_board_frame = candidate_frame
+            if self.last_snapshot is not None:
+                self.last_visible_snapshot = self.last_snapshot
+
         if state.scene != mc.SCENE_GAME or state.frame is None:
+            if (
+                self.tracked
+                and self.last_stable_frame is not None
+                and candidate_frame is not None
+                and not same_semantics(self.last_stable_frame, candidate_frame)
+            ):
+                move_index_start = self.move_index + 1
+                fast_event = build_move_event(
+                    self.last_stable_frame,
+                    self.last_snapshot,
+                    candidate_frame,
+                    game_index=self.game_index,
+                    move_index_start=move_index_start,
+                    capture_id=0,
+                    max_recovery_depth=self.max_recovery_depth,
+                )
+                if not self._event_failure_reasons(fast_event):
+                    self._commit_transition_event(
+                        state=state,
+                        final_frame=candidate_frame,
+                        final_ts_event=ts_event,
+                        event=fast_event,
+                        window_id=window_id,
+                        move_index_start=move_index_start,
+                        fast_confirmed=True,
+                    )
+                    return
             self.run_state = "waiting_for_game"
             self.message = f"Waiting for a game board. Current scene: {state.scene}."
             self.stable_state = None
@@ -998,6 +1162,30 @@ class LiveTrackerEngine:
             return
 
         frame = state.frame
+
+        if self.tracked and self.last_stable_frame is not None and not same_semantics(self.last_stable_frame, frame):
+            move_index_start = self.move_index + 1
+            fast_event = build_move_event(
+                self.last_stable_frame,
+                self.last_snapshot,
+                frame,
+                game_index=self.game_index,
+                move_index_start=move_index_start,
+                capture_id=0,
+                max_recovery_depth=self.max_recovery_depth,
+            )
+            if not self._event_failure_reasons(fast_event):
+                self._commit_transition_event(
+                    state=state,
+                    final_frame=frame,
+                    final_ts_event=ts_event,
+                    event=fast_event,
+                    window_id=window_id,
+                    move_index_start=move_index_start,
+                    fast_confirmed=True,
+                )
+                return
+
         if self.stable_state is None:
             self.stable_state = frame
             self.stable_count = 1
@@ -1021,9 +1209,6 @@ class LiveTrackerEngine:
             return
 
         settled = self.stable_state
-        self.last_visible_board_frame = settled
-        if self.last_snapshot is not None:
-            self.last_visible_snapshot = self.last_snapshot
         if not self.tracked:
             initial_error = ws._initial_state_error(settled.board, settled.preview_label)
             observed_error = None
@@ -1040,7 +1225,12 @@ class LiveTrackerEngine:
                     return
             self.last_snapshot = seed_snapshot(settled)
             if window_id is not None:
-                self.last_capture_id = self.recorder.record_game_state(settled, window_id, ts_event)
+                self.last_capture_id = self.recorder.record_game_state(
+                    settled,
+                    window_id,
+                    ts_event,
+                    async_write=True,
+                )
             self.latest_event = {
                 "type": "game_start",
                 "game_index": self.game_index,
@@ -1100,87 +1290,34 @@ class LiveTrackerEngine:
                     f"Move {move_index_start}: recovered on confirmation frame {retry_attempt}."
                 )
 
-        capture_id = self.last_capture_id or 0
-        if window_id is not None:
-            capture_id = self.recorder.record_game_state(final_frame, window_id, final_ts_event)
-        event["after_capture_id"] = capture_id
-        self.move_index += int(event.get("step_count", 1))
-        event["move_index"] = self.move_index
-        self.recorder.append_event(event)
-        self.latest_event = event
-
-        failure_reasons = self._event_failure_reasons(event)
-
-        if failure_reasons:
-            self.failure_reasons = failure_reasons
-            if window_id is not None:
-                scene_path = self.recorder.record_scene(
-                    state,
-                    f"failure_game{self.game_index:03d}_move{self.move_index:04d}",
-                    extra=event,
-                )
-                self.recorder.append_failure(
-                    {
-                        "game_index": self.game_index,
-                        "move_index": self.move_index,
-                        "reasons": failure_reasons,
-                        "scene_capture": scene_path,
-                        "event": event,
-                    }
-                )
-            self.run_state = "failure"
-            self.message = "Invalid tracked state detected. Re-seeding from the current board."
-            self._append_event(f"Invalid state at move {self.move_index}: {'; '.join(failure_reasons)}")
-            self._remember_issue(f"Move {self.move_index}: {'; '.join(failure_reasons)}")
-            self.tracked = False
-            self.last_stable_frame = None
-            self.last_snapshot = None
-            self.stable_state = None
-            self.stable_count = 0
-            return
-
-        next_snapshot = event["preview_check"].get("next_snapshot")
-        self.last_snapshot = next_snapshot if isinstance(next_snapshot, tuple) else next_snapshot
-        self.last_stable_frame = frame_with_board(final_frame, event.get("after_board"))
-        self.last_capture_id = capture_id
-        self.run_state = "tracking"
-        self.message = "Tracking live game state."
-        directions = event.get("direction_sequence", [])
-        direction_text = " -> ".join(directions) if directions else event.get("direction") or "?"
-        capture_retry = event.get("capture_retry")
-        if isinstance(capture_retry, dict):
-            attempt = capture_retry.get("attempt")
-            if attempt is not None:
-                self._append_event(
-                    f"Move {self.move_index}: confirmed on a later frame after {attempt} retry."
-                )
-                self._remember_issue(
-                    f"Move {self.move_index}: board read required {attempt} confirmation retry."
-                )
-        repair = event.get("board_repair")
-        if isinstance(repair, dict):
-            repaired_cells = repair.get("repaired_cells") or []
-            cell_text = ", ".join(
-                f"({cell['row']},{cell['col']}): {cell['observed']} -> {cell['expected']}"
-                for cell in repaired_cells
-                if isinstance(cell, dict)
-            )
-            if cell_text:
-                self._append_event(f"Repaired board read at move {self.move_index}: {cell_text}")
-                self._remember_issue(f"Move {self.move_index}: repaired board read ({cell_text})")
-        if event.get("recovered_missed_moves", 0) > 0:
-            self._append_event(
-                f"Moves {move_index_start}-{self.move_index}: {direction_text} "
-                f"(recovered {event['recovered_missed_moves']} skipped state)"
-            )
-        else:
-            self._append_event(f"Move {self.move_index}: {direction_text}")
+        self._commit_transition_event(
+            state=state,
+            final_frame=final_frame,
+            final_ts_event=final_ts_event,
+            event=event,
+            window_id=window_id,
+            move_index_start=move_index_start,
+            fast_confirmed=False,
+        )
 
     def _display_frame(self) -> Optional[mc.FrameState]:
         return self.last_stable_frame or self.last_visible_board_frame
 
     def _display_snapshot(self) -> Optional[tuple]:
         return self.last_snapshot or self.last_visible_snapshot
+
+    def _frame_snapshot_key(
+        self,
+        frame: Optional[mc.FrameState],
+        snapshot: Optional[tuple],
+    ) -> Optional[tuple]:
+        if frame is None:
+            return None
+        return (
+            tuple(tuple(row) for row in frame.board),
+            frame.preview_label,
+            snapshot,
+        )
 
     def _observed_preview_payload(self, frame: Optional[mc.FrameState]) -> Dict[str, object]:
         if frame is None:
@@ -1328,8 +1465,19 @@ class LiveTrackerEngine:
     def payload(self) -> Dict[str, object]:
         frame = self._display_frame()
         snapshot = self._display_snapshot()
-        rendered = render_tracked_board(frame, snapshot) if frame is not None else None
-        latest_event_pretty = json.dumps(self.latest_event, indent=2) if self.latest_event else None
+        board_key = self._frame_snapshot_key(frame, snapshot)
+        if board_key != self._cached_board_payload_key:
+            self._cached_rendered_board = render_tracked_board(frame, snapshot) if frame is not None else None
+            self._cached_probability_payload = self._probability_payload(frame)
+            self._cached_observed_preview_payload = self._observed_preview_payload(frame)
+            self._cached_board_payload_key = board_key
+            self._cached_probability_key = board_key
+            self._cached_observed_preview_key = board_key
+        if self.latest_event is not self._cached_latest_event_ref:
+            self._cached_latest_event_pretty = (
+                json.dumps(self.latest_event, indent=2) if self.latest_event else None
+            )
+            self._cached_latest_event_ref = self.latest_event
         return {
             "run_state": self.run_state,
             "message": self.message,
@@ -1337,14 +1485,14 @@ class LiveTrackerEngine:
             "tracking_enabled": self.last_snapshot is not None,
             "game_index": self.game_index,
             "move_index": self.move_index,
-            "rendered_board": rendered,
+            "rendered_board": self._cached_rendered_board,
             "board": frame.board if frame is not None else None,
-            "observed_preview": self._observed_preview_payload(frame),
-            "expected_next": self._probability_payload(frame),
+            "observed_preview": self._cached_observed_preview_payload,
+            "expected_next": self._cached_probability_payload,
             "failure_reasons": self.failure_reasons,
             "issue_log": list(self.issue_log),
             "latest_event": self.latest_event,
-            "latest_event_pretty": latest_event_pretty,
+            "latest_event_pretty": self._cached_latest_event_pretty,
             "last_capture_id": self.last_capture_id,
         }
 
@@ -1372,6 +1520,8 @@ class LiveDebugApp:
         self.session_dir: Optional[Path] = None
         self.action_busy = False
         self.action_message = "Ready."
+        self._last_runtime_write = 0.0
+        self._last_session_write = 0.0
 
     def _append_event(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -1405,26 +1555,57 @@ class LiveDebugApp:
         self.window_id = None
         self._ensure_window()
 
-    def _write_runtime_files(self, payload: Dict[str, object], images: LiveImages) -> None:
+    def _write_runtime_files(self, payload: Dict[str, object], images: LiveImages, *, force: bool = False) -> None:
         if self.session_dir is None:
+            return
+        now = time.perf_counter()
+        if not force and (now - self._last_session_write) < 0.5:
             return
         (self.session_dir / "live_status.json").write_text(json.dumps(payload, indent=2))
         (self.session_dir / "live_full.png").write_bytes(images.full_raw)
         (self.session_dir / "live_full_annotated.png").write_bytes(images.full_annotated)
+        self._last_session_write = now
+
+    def _target_poll_interval(self, payload: Dict[str, object]) -> float:
+        idle_poll = max(0.02, float(self.args.poll))
+        game_poll = max(0.02, min(idle_poll, float(self.args.game_poll)))
+        active_poll = max(0.02, min(game_poll, float(self.args.active_poll)))
+        if self.action_busy:
+            return active_poll
+        detected = payload.get("detected") or {}
+        if detected.get("board"):
+            tracker = payload.get("tracker") or {}
+            if tracker.get("run_state") == "settling":
+                return active_poll
+            return game_poll
+        if payload.get("scene") == mc.SCENE_GAME:
+            tracker = payload.get("tracker") or {}
+            if tracker.get("run_state") == "settling":
+                return active_poll
+            return game_poll
+        return idle_poll
 
     def _publish(self, payload: Dict[str, object], images: LiveImages) -> None:
-        runtime = {
-            "pid": os.getpid(),
-            "port": self.args.port,
-            "session_dir": str(self.session_dir) if self.session_dir else None,
-            "updated_at": payload.get("updated_at"),
-        }
-        (self.runtime_dir / "runtime.json").write_text(json.dumps(runtime, indent=2))
-        self._write_runtime_files(payload, images)
+        now = time.perf_counter()
+        if (now - self._last_runtime_write) >= 0.5:
+            runtime = {
+                "pid": os.getpid(),
+                "port": self.args.port,
+                "session_dir": str(self.session_dir) if self.session_dir else None,
+                "updated_at": payload.get("updated_at"),
+            }
+            (self.runtime_dir / "runtime.json").write_text(json.dumps(runtime, indent=2))
+            self._last_runtime_write = now
+        self._write_runtime_files(payload, images, force=(self.shared.revision == 0))
         with self.lock:
             self.shared.revision += 1
             payload["revision"] = self.shared.revision
             self.shared.payload = payload
+            self.shared.payload_json = json.dumps(
+                payload,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
             self.shared.images = images
 
     def _current_payload(self) -> Dict[str, object]:
@@ -1474,9 +1655,7 @@ class LiveDebugApp:
 
     def _state_json(self) -> bytes:
         with self.lock:
-            payload = dict(self.shared.payload)
-            payload["revision"] = self.shared.revision
-        return json.dumps(payload, indent=2).encode("utf-8")
+            return self.shared.payload_json
 
     def _image_bytes(self, name: str) -> Optional[bytes]:
         with self.lock:
@@ -1500,20 +1679,22 @@ class LiveDebugApp:
 
                 images = LiveImages()
                 raw_image = Image.fromarray(state.arr).convert("RGB")
-                images.full_raw = _png_bytes(raw_image)
-                images.full_annotated = _png_bytes(draw_full_annotated(state, state.frame))
+                raw_png = _png_bytes(raw_image)
+                images.full_raw = raw_png
+                images.full_annotated = raw_png
 
-                detected_board = state.frame.board if state.frame is not None else None
-                detected_preview = state.frame.preview_label if state.frame is not None else None
+                display_frame = state.frame or state.candidate_frame
+                detected_board = display_frame.board if display_frame is not None else None
+                detected_preview = display_frame.preview_label if display_frame is not None else None
                 detected_rendered = (
-                    ws.format_board_with_preview(state.frame.board, state.frame.preview_label)
-                    if state.frame is not None
+                    ws.format_board_with_preview(display_frame.board, display_frame.preview_label)
+                    if display_frame is not None
                     else None
                 )
                 issues: List[str] = []
-                if state.frame is not None and ws._board_has_unknowns(state.frame.board):
+                if display_frame is not None and ws._board_has_unknowns(display_frame.board):
                     issues.append("Detected board contains unknown cells.")
-                if state.frame is not None and state.frame.preview_label == "unknown":
+                if display_frame is not None and display_frame.preview_label == "unknown":
                     issues.append("Detected preview is unknown.")
                 tracker_payload = self.tracker.payload()
                 issues.extend(tracker_payload.get("issue_log", []))
@@ -1555,6 +1736,7 @@ class LiveDebugApp:
                         "full_annotated": "/frame/full_annotated.png",
                     },
                 }
+                payload["poll_target_ms"] = int(round(self._target_poll_interval(payload) * 1000))
                 self._publish(payload, images)
                 self.last_error = None
             except Exception as exc:  # noqa: BLE001
@@ -1602,7 +1784,8 @@ class LiveDebugApp:
                 self._refresh_window()
                 continue
 
-            sleep_for = max(0.02, self.args.poll - (time.perf_counter() - loop_start))
+            poll_target = self._target_poll_interval(payload)
+            sleep_for = max(0.02, poll_target - (time.perf_counter() - loop_start))
             self.stop_event.wait(sleep_for)
 
     def start_capture(self) -> None:

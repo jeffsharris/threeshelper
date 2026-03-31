@@ -1147,6 +1147,8 @@ def _board_layout_cache_key(
         except Exception:
             signature = None
     h, w, _ = roi.shape
+    if signature is not None:
+        return (h, w, b"", signature)
     thumb = Image.fromarray(roi).convert("L").resize((12, 12), Image.BILINEAR)
     return (h, w, thumb.tobytes(), signature)
 
@@ -1497,6 +1499,7 @@ class DatasetRecorder:
         self.unknown_tiles_dir.mkdir(parents=True, exist_ok=True)
         self.unknown_index_path = self.session_dir / "unknown_tiles.jsonl"
         self.capture_idx = 0
+        self._capture_lock = threading.Lock()
         self.last_capture_id: Optional[int] = None
         self.last_unknown_count = 0
         meta = {
@@ -1505,6 +1508,11 @@ class DatasetRecorder:
             "version": 1,
         }
         (self.session_dir / "session.json").write_text(json.dumps(_json_safe(meta), indent=2))
+
+    def reserve_capture_id(self) -> int:
+        with self._capture_lock:
+            self.capture_idx += 1
+            return self.capture_idx
 
     def record_capture(
         self,
@@ -1515,8 +1523,28 @@ class DatasetRecorder:
         window_id: int,
         ts_event: float,
     ) -> int:
-        self.capture_idx += 1
-        capture_id = self.capture_idx
+        capture_id = self.reserve_capture_id()
+        self.record_capture_with_id(
+            capture_id,
+            arr,
+            board,
+            preview_label,
+            preview_debug,
+            window_id,
+            ts_event,
+        )
+        return capture_id
+
+    def record_capture_with_id(
+        self,
+        capture_id: int,
+        arr: np.ndarray,
+        board: List[List[str]],
+        preview_label: str,
+        preview_debug: Dict,
+        window_id: int,
+        ts_event: float,
+    ) -> None:
         prefix = f"{capture_id:06d}"
         full_path = self.session_dir / f"{prefix}_full.png"
         board_path = self.session_dir / f"{prefix}_board.png"
@@ -1624,7 +1652,6 @@ class DatasetRecorder:
             f.write(json.dumps(_json_safe(manifest_entry)) + "\n")
 
         self.last_capture_id = capture_id
-        return capture_id
 
     def set_label(self, label: Optional[str]) -> Optional[int]:
         if self.last_capture_id is None:

@@ -1,4 +1,6 @@
 import json
+import queue
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -577,20 +579,64 @@ class HarnessRecorder:
         self.scene_dir = self.dataset.session_dir / "scenes"
         self.scene_dir.mkdir(parents=True, exist_ok=True)
         self.scene_idx = 0
+        self._capture_queue: "queue.Queue[Optional[Tuple[int, np.ndarray, List[List[str]], str, Dict, int, float]]]" = queue.Queue()
+        self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
+        self._capture_thread.start()
 
     @property
     def session_dir(self) -> Path:
         return self.dataset.session_dir
 
-    def record_game_state(self, frame: mc.FrameState, window_id: int, ts_event: float) -> int:
-        return self.dataset.record_capture(
-            frame.arr,
-            frame.board,
-            frame.preview_label,
-            frame.preview_debug,
-            window_id,
-            ts_event,
+    def _capture_worker(self) -> None:
+        while True:
+            item = self._capture_queue.get()
+            if item is None:
+                self._capture_queue.task_done()
+                return
+            capture_id, arr, board, preview_label, preview_debug, window_id, ts_event = item
+            try:
+                self.dataset.record_capture_with_id(
+                    capture_id,
+                    arr,
+                    board,
+                    preview_label,
+                    preview_debug,
+                    window_id,
+                    ts_event,
+                )
+            finally:
+                self._capture_queue.task_done()
+
+    def record_game_state(
+        self,
+        frame: mc.FrameState,
+        window_id: int,
+        ts_event: float,
+        *,
+        async_write: bool = False,
+    ) -> int:
+        if not async_write:
+            return self.dataset.record_capture(
+                frame.arr,
+                frame.board,
+                frame.preview_label,
+                frame.preview_debug,
+                window_id,
+                ts_event,
+            )
+        capture_id = self.dataset.reserve_capture_id()
+        self._capture_queue.put(
+            (
+                capture_id,
+                np.array(frame.arr, copy=True),
+                [list(row) for row in frame.board],
+                str(frame.preview_label),
+                _json_safe(frame.preview_debug),
+                int(window_id),
+                float(ts_event),
+            )
         )
+        return capture_id
 
     def record_scene(self, screen_state: mc.ScreenState, label: str, extra: Optional[Dict[str, object]] = None) -> str:
         self.scene_idx += 1
@@ -618,3 +664,6 @@ class HarnessRecorder:
 
     def write_status(self, status: Dict[str, object]) -> None:
         self.status_path.write_text(json.dumps(_json_safe(status), indent=2))
+
+    def flush(self) -> None:
+        self._capture_queue.join()

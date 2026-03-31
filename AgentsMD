@@ -53,10 +53,22 @@ Tracking and recovery behavior
 - `tracker_runtime.py` validates every observed move against the 4 legal swipe directions plus eligible spawn slots.
 - Gray-number repairs are legality-aware: they only resolve to a unique legal move candidate with sufficient raw classifier support.
 - `live_debug_server.py` keeps the normal path single-frame for responsiveness.
+- The live dashboard now separates `visible board` from `committed tracker state`:
+  - the visible board may come from a fast candidate frame immediately
+  - the tracker still advances only after a legality-valid move event
 - If a move would otherwise go invalid, the live tracker performs a short recapture/reconfirm loop before dropping state.
 - The dashboard `Start New Game` action uses:
   - in-Threes path: exit current game -> title -> new game
   - out-of-Threes path: home -> search `Threes` -> launch -> new game
+
+Latency notes
+- For live debugging, prefer `--capture-backend screen` when the iPhone Mirroring window is visible and unobscured.
+- `screen` captures the actual visible pixels on the desktop and is materially fresher than window-buffer capture for iPhone Mirroring.
+- `quartz` and `screencapture` remain available fallbacks when the mirrored window is hidden or occluded.
+- `benchmark_live_latency.py` has:
+  - `--mode direct` for raw capture + legality timing
+  - `--mode server` for end-to-end dashboard/API timing
+- The benchmark waits for a settled board before each sample; otherwise the numbers are polluted by the previous move still animating.
 
 Operational notes
 - Generated debugging artifacts live under:
