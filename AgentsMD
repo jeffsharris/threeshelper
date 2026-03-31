@@ -56,7 +56,7 @@ Tracking and recovery behavior
 - The live dashboard now separates `visible board` from `committed tracker state`:
   - the visible board may come from a fast candidate frame immediately
   - the tracker still advances only after a legality-valid move event
-- If a move would otherwise go invalid, the live tracker performs a short recapture/reconfirm loop before dropping state.
+- If a move would otherwise go invalid, the live tracker now retries across future frames without blocking the main capture loop.
 - The dashboard `Start New Game` action uses:
   - in-Threes path: exit current game -> title -> new game
   - out-of-Threes path: home -> search `Threes` -> launch -> new game
@@ -65,6 +65,7 @@ Latency notes
 - For live debugging, prefer `--capture-backend screen` when the iPhone Mirroring window is visible and unobscured.
 - `screen` captures the actual visible pixels on the desktop and is materially fresher than window-buffer capture for iPhone Mirroring.
 - `quartz` and `screencapture` remain available fallbacks when the mirrored window is hidden or occluded.
+- The live server can auto-fallback when the requested capture backend becomes slow or starts failing.
 - `benchmark_live_latency.py` has:
   - `--mode direct` for raw capture + legality timing
   - `--mode server` for end-to-end dashboard/API timing

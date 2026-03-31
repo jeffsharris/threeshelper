@@ -136,6 +136,7 @@ python3 live_debug_server.py --attach-current-game
    - Defaults to `--capture-backend screen`, which captures the visible on-screen region of the iPhone Mirroring window instead of the app window buffer.
    - `screen` is the preferred live-debug backend when the mirrored phone is visible and unobscured; it materially reduces stale-frame latency compared with window-buffer capture.
    - If the window is occluded or off-screen, fall back to `--capture-backend quartz` or `--capture-backend screencapture`.
+   - The live server now auto-falls back if the requested backend becomes slow or starts failing, instead of staying stuck on a degraded capture path.
    - The live board panel now uses the fastest candidate board read immediately, while the tracker still waits for a legality-valid committed move before advancing internal state.
 
 Watch a human-played game from the next fresh board with a live dashboard:
@@ -190,6 +191,7 @@ Useful notes:
 - `observe_human_game.py` waits for a real fresh board by default, validates each settled move, recovers short missed human sequences when possible, and records rewindable artifacts in `datasets/human_watch/`.
 - `hunt_invalid_states.py` uses the same validator and artifact format for autonomous repeated-play runs in `datasets/state_hunt/`.
 - `live_debug_server.py` keeps the fast path single-frame, but on an otherwise invalid move it performs a short recapture/reconfirm loop before dropping state.
+- Invalid-state recovery is non-blocking in the live server now: ambiguous transitions are retried across future frames instead of sleeping inside the main capture loop.
 - `benchmark_live_latency.py` now waits for a genuinely settled board before each sample so latency numbers are not polluted by the previous move still animating.
 - Mid-game attach is guarded: the tracker will not attach to obviously bogus boards such as empty grids, unknown-cell reads, or boards missing the required 48+ anchor tile.
 - The dashboard `Start New Game` action now has two paths:

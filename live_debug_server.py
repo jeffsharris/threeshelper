@@ -23,6 +23,13 @@ ACTION_FOCUS_DELAY = 0.08
 ACTION_TRANSITION_DELAY = 0.35
 ACTION_TIMEOUT = 10.0
 ACTION_POLL = 0.15
+CAPTURE_SLOW_MS = 450
+CAPTURE_SLOW_STREAK = 2
+CAPTURE_FALLBACKS = {
+    "screen": ("screen", "screencapture", "quartz"),
+    "quartz": ("quartz", "screencapture"),
+    "screencapture": ("screencapture", "quartz"),
+}
 
 
 DASHBOARD_HTML = """<!doctype html>
@@ -852,6 +859,18 @@ class SharedState:
     images: LiveImages = field(default_factory=LiveImages)
 
 
+@dataclass
+class PendingTransitionRetry:
+    before_frame: mc.FrameState
+    before_snapshot: Optional[tuple]
+    initial_after_frame: mc.FrameState
+    game_index: int
+    move_index_start: int
+    remaining_attempts: int
+    attempts_used: int = 0
+    last_signature: Optional[tuple] = None
+
+
 class LiveTrackerEngine:
     def __init__(
         self,
@@ -890,6 +909,7 @@ class LiveTrackerEngine:
         self.failure_reasons: List[str] = []
         self.latest_event: Optional[Dict[str, object]] = None
         self.end_scene_active = False
+        self.pending_retry: Optional[PendingTransitionRetry] = None
         self._cached_board_payload_key: Optional[tuple] = None
         self._cached_rendered_board: Optional[str] = None
         self._cached_probability_key: Optional[tuple] = None
@@ -916,6 +936,7 @@ class LiveTrackerEngine:
         self.last_capture_id = None
         self.stable_state = None
         self.stable_count = 0
+        self.pending_retry = None
         if new_game:
             self.game_index += 1
             self.move_index = 0
@@ -943,46 +964,6 @@ class LiveTrackerEngine:
             for reason in reasons
         )
 
-    def _retry_transition_capture(
-        self,
-        before_frame: mc.FrameState,
-        before_snapshot: Optional[tuple],
-        initial_after_frame: mc.FrameState,
-        game_index: int,
-        move_index_start: int,
-        window_id: int,
-    ) -> tuple[Optional[Dict[str, object]], Optional[mc.FrameState], int]:
-        for attempt in range(1, self.recheck_attempts + 1):
-            time.sleep(self.recheck_delay * (2 ** (attempt - 1)))
-            retry_state = mc.capture_screen_state(window_id, self.capture_backend)
-            if retry_state.scene != mc.SCENE_GAME or retry_state.frame is None:
-                continue
-            retry_frame = retry_state.frame
-            if same_semantics(before_frame, retry_frame):
-                continue
-            retry_event = build_move_event(
-                before_frame,
-                before_snapshot,
-                retry_frame,
-                game_index=game_index,
-                move_index_start=move_index_start,
-                capture_id=0,
-                max_recovery_depth=self.max_recovery_depth,
-            )
-            retry_reasons = self._event_failure_reasons(retry_event)
-            if retry_reasons:
-                continue
-            retry_event["capture_retry"] = {
-                "reason": "resolved on a later confirmation frame",
-                "attempt": attempt,
-                "initial_after_board": initial_after_frame.board,
-                "initial_after_preview": initial_after_frame.preview_label,
-                "resolved_after_board": retry_event.get("after_board"),
-                "resolved_after_preview": retry_event.get("after_preview_label"),
-            }
-            return retry_event, retry_frame, attempt
-        return None, None, 0
-
     def _commit_transition_event(
         self,
         *,
@@ -1009,6 +990,7 @@ class LiveTrackerEngine:
             event["fast_confirmed"] = True
         self.recorder.append_event(event)
         self.latest_event = event
+        self.pending_retry = None
 
         failure_reasons = self._event_failure_reasons(event)
         if failure_reasons:
@@ -1126,6 +1108,63 @@ class LiveTrackerEngine:
             self.last_visible_board_frame = candidate_frame
             if self.last_snapshot is not None:
                 self.last_visible_snapshot = self.last_snapshot
+
+        if self.pending_retry is not None and candidate_frame is not None:
+            pending = self.pending_retry
+            signature = (
+                tuple(tuple(row) for row in candidate_frame.board),
+                candidate_frame.preview_label,
+            )
+            if signature != pending.last_signature and not same_semantics(pending.before_frame, candidate_frame):
+                pending.last_signature = signature
+                pending.attempts_used += 1
+                retry_event = build_move_event(
+                    pending.before_frame,
+                    pending.before_snapshot,
+                    candidate_frame,
+                    game_index=pending.game_index,
+                    move_index_start=pending.move_index_start,
+                    capture_id=0,
+                    max_recovery_depth=self.max_recovery_depth,
+                )
+                retry_reasons = self._event_failure_reasons(retry_event)
+                if not retry_reasons:
+                    retry_event["capture_retry"] = {
+                        "reason": "resolved on a later confirmation frame",
+                        "attempt": pending.attempts_used,
+                        "initial_after_board": pending.initial_after_frame.board,
+                        "initial_after_preview": pending.initial_after_frame.preview_label,
+                        "resolved_after_board": retry_event.get("after_board"),
+                        "resolved_after_preview": retry_event.get("after_preview_label"),
+                    }
+                    self._commit_transition_event(
+                        state=state,
+                        final_frame=candidate_frame,
+                        final_ts_event=ts_event,
+                        event=retry_event,
+                        window_id=window_id,
+                        move_index_start=pending.move_index_start,
+                        fast_confirmed=False,
+                    )
+                    return
+                pending.remaining_attempts -= 1
+                if pending.remaining_attempts <= 0:
+                    self._commit_transition_event(
+                        state=state,
+                        final_frame=candidate_frame,
+                        final_ts_event=ts_event,
+                        event=retry_event,
+                        window_id=window_id,
+                        move_index_start=pending.move_index_start,
+                        fast_confirmed=False,
+                    )
+                    return
+                self.run_state = "settling"
+                self.message = (
+                    f"Rechecking an ambiguous board read ({pending.attempts_used}/"
+                    f"{pending.attempts_used + pending.remaining_attempts})."
+                )
+                return
 
         if state.scene != mc.SCENE_GAME or state.frame is None:
             if (
@@ -1273,22 +1312,18 @@ class LiveTrackerEngine:
         )
         failure_reasons = self._event_failure_reasons(event)
         if self._should_retry_transition(failure_reasons, window_id):
-            recovered_event, recovered_frame, retry_attempt = self._retry_transition_capture(
-                self.last_stable_frame,
-                self.last_snapshot,
-                settled,
+            self.pending_retry = PendingTransitionRetry(
+                before_frame=self.last_stable_frame,
+                before_snapshot=self.last_snapshot,
+                initial_after_frame=settled,
                 game_index=self.game_index,
                 move_index_start=move_index_start,
-                window_id=window_id or 0,
+                remaining_attempts=self.recheck_attempts,
             )
-            if recovered_event is not None and recovered_frame is not None:
-                event = recovered_event
-                final_frame = recovered_frame
-                final_ts_event = time.time()
-                failure_reasons = []
-                self._append_event(
-                    f"Move {move_index_start}: recovered on confirmation frame {retry_attempt}."
-                )
+            self.run_state = "settling"
+            self.message = "Rechecking an ambiguous board read."
+            self._append_event(f"Move {move_index_start}: waiting for confirmation frame.")
+            return
 
         self._commit_transition_event(
             state=state,
@@ -1522,6 +1557,9 @@ class LiveDebugApp:
         self.action_message = "Ready."
         self._last_runtime_write = 0.0
         self._last_session_write = 0.0
+        self.active_capture_backend = args.capture_backend
+        self._slow_capture_streak = 0
+        self._capture_backend_degraded = False
 
     def _append_event(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -1554,6 +1592,56 @@ class LiveDebugApp:
     def _refresh_window(self) -> None:
         self.window_id = None
         self._ensure_window()
+
+    def _preferred_capture_backends(self) -> List[str]:
+        order = list(CAPTURE_FALLBACKS.get(self.active_capture_backend, (self.active_capture_backend,)))
+        if self.args.capture_backend not in order:
+            order.insert(0, self.args.capture_backend)
+        seen = set()
+        out: List[str] = []
+        for backend in order:
+            if backend in seen:
+                continue
+            seen.add(backend)
+            out.append(backend)
+        return out
+
+    def _record_capture_health(self, backend: str, elapsed_ms: float) -> None:
+        if backend == "screen" and elapsed_ms > CAPTURE_SLOW_MS:
+            self._slow_capture_streak += 1
+        else:
+            self._slow_capture_streak = 0
+        if backend == "screen" and self._slow_capture_streak >= CAPTURE_SLOW_STREAK:
+            self.active_capture_backend = "screencapture"
+            self._capture_backend_degraded = True
+            self._slow_capture_streak = 0
+            self._append_event(
+                f"Capture backend fallback: screen was slow ({int(round(elapsed_ms))}ms), switching to screencapture."
+            )
+
+    def _capture_state(self) -> tuple[mc.ScreenState, str, int]:
+        last_error: Optional[Exception] = None
+        for backend in self._preferred_capture_backends():
+            started = time.perf_counter()
+            try:
+                state = mc.capture_screen_state(self.window_id, backend)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if backend != self.active_capture_backend:
+                    continue
+                if backend != "screencapture":
+                    self._append_event(f"Capture backend fallback: {backend} failed ({exc}); retrying with screencapture.")
+                    self.active_capture_backend = "screencapture"
+                continue
+            elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+            if backend != self.active_capture_backend:
+                self._append_event(f"Capture backend recovered on {backend}.")
+            self.active_capture_backend = backend
+            self._record_capture_health(backend, elapsed_ms)
+            return state, backend, elapsed_ms
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No capture backend succeeded.")
 
     def _write_runtime_files(self, payload: Dict[str, object], images: LiveImages, *, force: bool = False) -> None:
         if self.session_dir is None:
@@ -1674,7 +1762,7 @@ class LiveDebugApp:
                 self._ensure_window()
                 assert self.window_id is not None
                 assert self.tracker is not None
-                state = mc.capture_screen_state(self.window_id, self.args.capture_backend)
+                state, capture_backend, capture_ms = self._capture_state()
                 self.tracker.observe(state, self.window_id, time.time())
 
                 images = LiveImages()
@@ -1708,15 +1796,24 @@ class LiveDebugApp:
                         continue
                     deduped_issues.append(issue)
                     seen_issues.add(issue)
+                if self._capture_backend_degraded and self.active_capture_backend != self.args.capture_backend:
+                    note = (
+                        f"Capture backend auto-fallback active: requested {self.args.capture_backend}, "
+                        f"using {self.active_capture_backend}."
+                    )
+                    if note not in seen_issues:
+                        deduped_issues.append(note)
+                        seen_issues.add(note)
 
-                elapsed_ms = int((time.perf_counter() - loop_start) * 1000)
+                elapsed_ms = max(capture_ms, int((time.perf_counter() - loop_start) * 1000))
                 payload = {
                     "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "captured_at_ms": captured_at_ms,
                     "capture_elapsed_ms": elapsed_ms,
-                    "backend": self.args.capture_backend,
+                    "backend": capture_backend,
                     "window_id": self.window_id,
                     "window_title": self.window_title,
+                    "requested_backend": self.args.capture_backend,
                     "scene": state.scene,
                     "scene_score": state.scene_score,
                     "scene_scores": state.scene_scores,
