@@ -3,6 +3,7 @@ from typing import Dict, Optional
 import mirroring_control as mc
 import window_stream as ws
 from state_hunt import (
+    find_single_step_gray_repair,
     find_transition_paths,
     preview_check_from_snapshot,
     serialize_transition_step,
@@ -12,6 +13,18 @@ from state_hunt import (
 
 def same_semantics(a: mc.FrameState, b: mc.FrameState) -> bool:
     return a.board == b.board and a.preview_label == b.preview_label
+
+
+def frame_with_board(frame: mc.FrameState, board: Optional[list[list[str]]]) -> mc.FrameState:
+    if board is None or board == frame.board:
+        return frame
+    return mc.FrameState(
+        arr=frame.arr,
+        board=[list(row) for row in board],
+        preview_label=frame.preview_label,
+        preview_debug=frame.preview_debug,
+        board_sig=frame.board_sig,
+    )
 
 
 def seed_snapshot(frame: mc.FrameState) -> Optional[tuple]:
@@ -112,6 +125,54 @@ def build_move_event(
                 "after_board": after_frame.board,
             }
         ]
+        return event
+
+    gray_cells = {
+        (r, c): cell
+        for r, c, _box, cell in ws.segment_board_cells_with_boxes(
+            after_frame.arr,
+            inset_ratio=ws.GRAY_INSET_RATIO,
+        )[0]
+    }
+    repair = find_single_step_gray_repair(
+        before_frame.board,
+        before_frame.preview_label,
+        after_frame.board,
+        gray_cells=gray_cells,
+        max_gray_mismatches=1,
+    )
+    if repair is not None:
+        repaired_board = repair.step.after_board
+        event["direction"] = repair.step.direction
+        event["possible_directions"] = []
+        event["direction_sequence"] = [repair.step.direction]
+        event["transition_path"] = [serialize_transition_step(repair.step)]
+        event["after_board"] = repaired_board
+        event["preview_check"] = preview_check_from_snapshot(
+            before_snapshot,
+            repaired_board,
+            after_frame.preview_label,
+        )
+        event["board_repair"] = {
+            "reason": "single-step gray-tile repair",
+            "mismatch_positions": [list(pos) for pos in repair.mismatch_positions],
+            "repaired_cells": repair.repaired_cells,
+            "support_score": repair.support_score,
+            "observed_after_board": after_frame.board,
+            "resolved_after_board": repaired_board,
+        }
+        event["transition_check"] = {
+            "valid": True,
+            "reason": "legal move after gray-tile repair",
+            "eligible_positions": repair.step.eligible_positions,
+            "expected_values": repair.step.expected_values,
+            "inserted_value": repair.step.inserted_value,
+            "inserted_pos": repair.step.inserted_pos,
+            "best_mismatch": {
+                "gray_mismatch_count": len(repair.mismatch_positions),
+                "positions": [list(pos) for pos in repair.mismatch_positions],
+            },
+        }
         return event
 
     paths = find_transition_paths(

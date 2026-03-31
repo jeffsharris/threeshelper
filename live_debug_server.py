@@ -16,7 +16,7 @@ import mirroring_control as mc
 import window_stream as ws
 from PIL import Image
 from state_hunt import HarnessRecorder
-from tracker_runtime import build_move_event, render_tracked_board, same_semantics, seed_snapshot
+from tracker_runtime import build_move_event, frame_with_board, render_tracked_board, same_semantics, seed_snapshot
 
 
 DASHBOARD_HTML = """<!doctype html>
@@ -954,12 +954,23 @@ class LiveTrackerEngine:
 
         next_snapshot = event["preview_check"].get("next_snapshot")
         self.last_snapshot = next_snapshot if isinstance(next_snapshot, tuple) else next_snapshot
-        self.last_stable_frame = settled
+        self.last_stable_frame = frame_with_board(settled, event.get("after_board"))
         self.last_capture_id = capture_id
         self.run_state = "tracking"
         self.message = "Tracking live game state."
         directions = event.get("direction_sequence", [])
         direction_text = " -> ".join(directions) if directions else event.get("direction") or "?"
+        repair = event.get("board_repair")
+        if isinstance(repair, dict):
+            repaired_cells = repair.get("repaired_cells") or []
+            cell_text = ", ".join(
+                f"({cell['row']},{cell['col']}): {cell['observed']} -> {cell['expected']}"
+                for cell in repaired_cells
+                if isinstance(cell, dict)
+            )
+            if cell_text:
+                self._append_event(f"Repaired board read at move {self.move_index}: {cell_text}")
+                self._remember_issue(f"Move {self.move_index}: repaired board read ({cell_text})")
         if event.get("recovered_missed_moves", 0) > 0:
             self._append_event(
                 f"Moves {move_index_start}-{self.move_index}: {direction_text} "

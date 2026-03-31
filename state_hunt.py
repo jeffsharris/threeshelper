@@ -41,6 +41,14 @@ class TransitionPath:
     preview_check: Dict[str, object]
 
 
+@dataclass
+class TransitionRepair:
+    step: TransitionStep
+    mismatch_positions: List[Tuple[int, int]]
+    repaired_cells: List[Dict[str, object]]
+    support_score: float
+
+
 def _json_safe(value):
     if isinstance(value, dict):
         return {str(k): _json_safe(v) for k, v in value.items()}
@@ -51,6 +59,10 @@ def _json_safe(value):
     if isinstance(value, np.ndarray):
         return value.tolist()
     return value
+
+
+def _is_gray_numeric_token(token: str) -> bool:
+    return isinstance(token, str) and token.isdigit()
 
 
 def can_merge(a: int, b: int) -> bool:
@@ -363,6 +375,85 @@ def serialize_transition_step(step: TransitionStep) -> Dict[str, object]:
         "expected_values": step.expected_values,
         "after_board": step.after_board,
     }
+
+
+def find_single_step_gray_repair(
+    before_board: Sequence[Sequence[str]],
+    before_preview: str,
+    observed_after_board: Sequence[Sequence[str]],
+    gray_cells: Optional[Dict[Tuple[int, int], np.ndarray]] = None,
+    max_gray_mismatches: int = 1,
+) -> Optional[TransitionRepair]:
+    """
+    Look for a unique legal one-step result that differs only by a small number of
+    gray numeric cells. This lets the tracker recover from isolated big-tile
+    misreads without masking broader board-capture failures.
+    """
+    if max_gray_mismatches <= 0:
+        return None
+
+    score_threshold = ws.gray_label_score_threshold()
+    candidates: List[TransitionRepair] = []
+    for step in generate_transition_steps(before_board, before_preview):
+        mismatch_positions: List[Tuple[int, int]] = []
+        repaired_cells: List[Dict[str, object]] = []
+        support_score = 0.0
+        valid = True
+
+        for r in range(4):
+            for c in range(4):
+                expected_token = step.after_board[r][c]
+                observed_token = observed_after_board[r][c]
+                if expected_token == observed_token:
+                    continue
+                if not (_is_gray_numeric_token(expected_token) and _is_gray_numeric_token(observed_token)):
+                    valid = False
+                    break
+                mismatch_positions.append((r, c))
+                if len(mismatch_positions) > max_gray_mismatches:
+                    valid = False
+                    break
+
+                score_map = ws.gray_label_scores(gray_cells[(r, c)]) if gray_cells and (r, c) in gray_cells else {}
+                expected_score = score_map.get(expected_token)
+                observed_score = score_map.get(observed_token)
+                if score_map and score_threshold > 0.0:
+                    if expected_score is None or expected_score < score_threshold:
+                        valid = False
+                        break
+                    support_score += float(expected_score)
+                repaired_cells.append(
+                    {
+                        "row": r,
+                        "col": c,
+                        "observed": observed_token,
+                        "expected": expected_token,
+                        "expected_score": expected_score,
+                        "observed_score": observed_score,
+                    }
+                )
+            if not valid:
+                break
+
+        if valid and mismatch_positions:
+            candidates.append(
+                TransitionRepair(
+                    step=step,
+                    mismatch_positions=mismatch_positions,
+                    repaired_cells=repaired_cells,
+                    support_score=support_score,
+                )
+            )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (len(item.mismatch_positions), -item.support_score))
+    best_count = len(candidates[0].mismatch_positions)
+    best_group = [item for item in candidates if len(item.mismatch_positions) == best_count]
+    if len(best_group) != 1:
+        return None
+    return best_group[0]
 
 
 def find_transition_paths(

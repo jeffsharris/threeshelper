@@ -11,7 +11,7 @@ import mirroring_control as mc
 import window_stream as ws
 from PIL import Image
 from state_hunt import HarnessRecorder
-from tracker_runtime import build_move_event, render_tracked_board, same_semantics, seed_snapshot
+from tracker_runtime import build_move_event, frame_with_board, render_tracked_board, same_semantics, seed_snapshot
 
 
 DASHBOARD_HTML = """<!doctype html>
@@ -1211,7 +1211,7 @@ def main() -> None:
 
             next_snapshot = event["preview_check"].get("next_snapshot")
             last_snapshot = next_snapshot if isinstance(next_snapshot, tuple) else next_snapshot
-            last_stable_frame = settled
+            last_stable_frame = frame_with_board(settled, event.get("after_board"))
             last_capture_id = capture_id
             last_move_ts = time.time()
 
@@ -1225,7 +1225,17 @@ def main() -> None:
                 )
             else:
                 print(f"observed move {move_index}: {direction_text}", flush=True)
-            print_frame(settled, last_snapshot)
+            repair = event.get("board_repair")
+            if isinstance(repair, dict):
+                repaired_cells = repair.get("repaired_cells") or []
+                cell_text = ", ".join(
+                    f"({cell['row']},{cell['col']}): {cell['observed']} -> {cell['expected']}"
+                    for cell in repaired_cells
+                    if isinstance(cell, dict)
+                )
+                if cell_text:
+                    print(f"repaired board read at move {move_index}: {cell_text}", flush=True)
+            print_frame(last_stable_frame, last_snapshot)
             print(flush=True)
             publish_status(
                 run_state="tracking",

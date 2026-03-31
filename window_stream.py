@@ -496,6 +496,21 @@ def classify_gray_tile(cell: np.ndarray) -> Optional[str]:
     return None
 
 
+def gray_label_scores(cell: np.ndarray) -> Dict[str, float]:
+    """Expose raw gray-label similarities for repair-time reasoning."""
+    hog_model = gh.load_model()
+    if not hog_model:
+        return {}
+    return gh.score_labels(cell, hog_model)
+
+
+def gray_label_score_threshold() -> float:
+    hog_model = gh.load_model()
+    if not hog_model:
+        return 0.0
+    return float(hog_model.get("score_threshold", 0.0))
+
+
 def _gray_template_best_match(
     cell: np.ndarray,
 ) -> Tuple[Optional[str], float, float, float]:

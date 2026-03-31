@@ -239,6 +239,56 @@ def load_model(path: Path = Path("gray_tile_hog.json")) -> Optional[Dict[str, ob
     return data
 
 
+def score_labels(
+    cell: np.ndarray,
+    model: Dict[str, object],
+) -> Dict[str, float]:
+    """
+    Return the strongest raw similarity observed for each label.
+
+    This exposes the underlying gray-tile evidence without forcing a single hard
+    prediction, which is useful when tracker context needs to repair a weak board read.
+    """
+    params = model.get("params", {})
+    margin = float(params.get("margin", 0.1))
+    size = int(params.get("size", 32))
+    cell_size = int(params.get("cell_size", 8))
+    bins = int(params.get("bins", 9))
+
+    glyph = normalize_glyph(cell, margin=margin, size=size)
+    feat = hog_features(glyph, cell_size=cell_size, bins=bins)
+    if feat.size == 0:
+        return {}
+    feat = _normalize_vec(feat)
+
+    samples = model.get("samples", [])
+    scores: Dict[str, float] = {}
+    if not samples:
+        mean_vectors = {
+            label: np.array(vec, dtype=np.float32)
+            for label, vec in model.get("mean_vectors", {}).items()
+        }
+        for label, vec in mean_vectors.items():
+            scores[str(label)] = float(np.dot(feat, vec))
+        return scores
+
+    is_yellow = yellow_ratio(cell) > 0.5
+    yellow_labels = set(model.get("yellow_labels", []))
+    for sample in samples:
+        label = str(sample.get("label"))
+        if yellow_labels:
+            if is_yellow and label not in yellow_labels:
+                continue
+            if not is_yellow and label in yellow_labels:
+                continue
+        vec = np.array(sample.get("vec", []), dtype=np.float32)
+        if vec.size == 0:
+            continue
+        score = float(np.dot(feat, vec))
+        scores[label] = max(scores.get(label, float("-inf")), score)
+    return scores
+
+
 def predict_label(
     cell: np.ndarray,
     model: Dict[str, object],
