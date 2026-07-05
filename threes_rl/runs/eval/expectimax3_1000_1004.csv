@@ -1,0 +1,6 @@
+seed,score,moves,max_tile,terminal_tile
+1000,68943,95,1536,False
+1001,81306,122,1536,False
+1002,67746,111,1536,False
+1003,79929,153,1536,False
+1004,86850,230,1536,False

@@ -1,5 +1,7 @@
 numpy
 Pillow
 ImageHash
+gymnasium
 openai
 pyobjc-framework-Quartz
+torch

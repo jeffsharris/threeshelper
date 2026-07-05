@@ -1,0 +1,12 @@
+{"accuracy": 0.4637935161590576, "epoch": 1, "expert": "expectimax2", "loss": 1.156876532236735, "samples": 30000}
+{"accuracy": 0.5279245475927988, "epoch": 2, "expert": "expectimax2", "loss": 1.0170698940753937, "samples": 30000}
+{"accuracy": 0.5439692974090576, "epoch": 3, "expert": "expectimax2", "loss": 0.9844706336657206, "samples": 30000}
+{"accuracy": 0.5529759466648102, "epoch": 4, "expert": "expectimax2", "loss": 0.9675544341405232, "samples": 30000}
+{"accuracy": 0.5614617606004079, "epoch": 5, "expert": "expectimax2", "loss": 0.9523656487464904, "samples": 30000}
+{"accuracy": 0.5669716278711955, "epoch": 6, "expert": "expectimax2", "loss": 0.9399926861127218, "samples": 30000}
+{"accuracy": 0.5744603216648102, "epoch": 7, "expert": "expectimax2", "loss": 0.9283899466196696, "samples": 30000}
+{"accuracy": 0.5786938051382701, "epoch": 8, "expert": "expectimax2", "loss": 0.9179347058137258, "samples": 30000}
+{"accuracy": 0.5867804268995921, "epoch": 9, "expert": "expectimax2", "loss": 0.9054956078529358, "samples": 30000}
+{"accuracy": 0.597678522268931, "epoch": 10, "expert": "expectimax2", "loss": 0.8905388911565145, "samples": 30000}
+{"accuracy": 0.6100705862045288, "epoch": 11, "expert": "expectimax2", "loss": 0.8730729500452677, "samples": 30000}
+{"accuracy": 0.6205729166666667, "epoch": 12, "expert": "expectimax2", "loss": 0.8563054243723551, "samples": 30000}

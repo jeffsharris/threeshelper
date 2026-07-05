@@ -10,8 +10,18 @@ certifi==2026.2.25
     # via
     #   httpcore
     #   httpx
+cloudpickle==3.1.2
+    # via gymnasium
 distro==1.9.0
     # via openai
+farama-notifications==0.0.6
+    # via gymnasium
+filelock==3.29.4
+    # via torch
+fsspec==2026.6.0
+    # via torch
+gymnasium==1.3.0
+    # via -r requirements.in
 h11==0.16.0
     # via httpcore
 httpcore==1.0.9
@@ -24,11 +34,20 @@ idna==3.11
     #   httpx
 imagehash==4.3.2
     # via -r requirements.in
+jinja2==3.1.6
+    # via torch
 jiter==0.13.0
     # via openai
+markupsafe==3.0.3
+    # via jinja2
+mpmath==1.3.0
+    # via sympy
+networkx==3.6.1
+    # via torch
 numpy==2.4.3
     # via
     #   -r requirements.in
+    #   gymnasium
     #   imagehash
     #   pywavelets
     #   scipy
@@ -54,15 +73,24 @@ pywavelets==1.9.0
     # via imagehash
 scipy==1.17.1
     # via imagehash
+setuptools==81.0.0
+    # via torch
 sniffio==1.3.1
     # via openai
+sympy==1.14.0
+    # via torch
+torch==2.12.1
+    # via -r requirements.in
 tqdm==4.67.3
     # via openai
 typing-extensions==4.15.0
     # via
+    #   anyio
+    #   gymnasium
     #   openai
     #   pydantic
     #   pydantic-core
+    #   torch
     #   typing-inspection
 typing-inspection==0.4.2
     # via pydantic
