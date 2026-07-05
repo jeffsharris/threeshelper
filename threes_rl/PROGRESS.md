@@ -1,5 +1,9 @@
 # Threes RL Progress
 
+See `threes_rl/SETUP.md` for clone/setup/run instructions and
+`threes_rl/ML_FINDINGS.md` for the research summary and next-experiment
+recommendations.
+
 ## 2026-07-05
 
 - M0 core simulator implemented in `threes_rl/sim.py`.
