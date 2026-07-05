@@ -8,3 +8,7 @@ tmp_*.png
 
 datasets/state_hunt/
 datasets/human_watch/
+
+threes_rl/runs/eval/*.csv
+threes_rl/runs/*/checkpoint_epoch_*.pt
+threes_rl/runs/*/dataset.npz

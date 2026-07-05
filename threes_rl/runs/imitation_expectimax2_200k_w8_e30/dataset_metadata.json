@@ -1,0 +1,11 @@
+{
+  "chunk_size": 5000,
+  "checkpoint_every": 5,
+  "dataset_source": "threes_rl/runs/imitation_expectimax2_200k_w8_e30/dataset.npz",
+  "expert": "expectimax2",
+  "obs_encoder": "full",
+  "samples": 200000,
+  "seed": 1,
+  "starter_tile": 1536,
+  "workers": 8
+}

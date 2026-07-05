@@ -127,11 +127,9 @@ Command: `python -m threes_rl.eval --policy ppo:threes_rl/runs/imitation_expecti
 }
 ```
 
-Best learned checkpoint so far: `threes_rl/runs/imitation_expectimax2_30k/latest.pt`.
+## Eval: learned imitation_expectimax2_200k_epoch20
 
-## Eval: ppo:threes_rl/runs/ppo_final_200k/latest.pt
-
-Command: `python -m threes_rl.eval --policy ppo:threes_rl/runs/ppo_final_200k/latest.pt --seeds 1000:1200`
+Command: `python -m threes_rl.eval --policy ppo:threes_rl/runs/imitation_expectimax2_200k_w8_e30/checkpoint_epoch_20.pt --seeds 1000:1200 --no-append`
 
 ```json
 {
@@ -145,9 +143,16 @@ Command: `python -m threes_rl.eval --policy ppo:threes_rl/runs/ppo_final_200k/la
     ">=6144": 0.0,
     ">=768": 1.0
   },
-  "mean_moves": 28.005,
-  "mean_score": 59589.96,
-  "median_score": 59182.5,
-  "p90_score": 60024
+  "mean_moves": 60.81,
+  "mean_score": 61826.34,
+  "median_score": 61048.5,
+  "p90_score": 66237
 }
 ```
+
+Best learned checkpoint so far: `threes_rl/runs/imitation_expectimax2_200k_w8_e30/checkpoint_epoch_20.pt`.
+
+## Wider sanity check
+
+- Greedy, seeds 1000:2000: mean score 60224.63, mean moves 39.02.
+- Learned `imitation_expectimax2_200k_epoch20`, seeds 1000:2000: mean score 61489.74, mean moves 59.97.

@@ -27,9 +27,14 @@
   - Greedy imitation 200k samples reached 63.29% training accuracy and 60109.77 mean score on the fixed 200-seed eval, slightly below the greedy expert.
   - Expectimax-d2 imitation 10k samples reached 59.60% training accuracy and 60221.66 mean score.
   - Expectimax-d2 imitation 30k samples reached 62.06% training accuracy and 60848.28 mean score on the fixed 200-seed eval, beating greedy by 543.99 mean score.
-  - Best learned checkpoint so far: `threes_rl/runs/imitation_expectimax2_30k/latest.pt`.
+  - Expectimax-d2 imitation 100k samples improved with more epochs up to 61385.97 mean score at 30 epochs, then regressed to 60896.19 at 60 epochs despite higher training accuracy.
+  - Expectimax-d2 imitation 200k samples with epoch checkpoints peaked at epoch 20: mean score 61826.34, mean moves 60.81 on the fixed 200-seed eval.
+  - Wider 1000-seed sanity check: greedy mean score 60224.63, best learned checkpoint mean score 61489.74.
+  - Best learned checkpoint so far: `threes_rl/runs/imitation_expectimax2_200k_w8_e30/checkpoint_epoch_20.pt`.
 - Handoff / Mac Mini resume notes.
-  - Current bottleneck for better learned policies is expectimax-d2 data generation, measured at roughly 82-88 expert samples/s here. More CPU throughput helps; extra RAM alone is less important for the current implementation.
-  - To scale the best path on another machine: run `python -m threes_rl.train_imitation --run-name imitation_expectimax2_200k --expert expectimax2 --samples 200000 --epochs 15 --batch-size 1024 --device cpu`.
-  - Evaluate with `python -m threes_rl.eval --policy ppo:threes_rl/runs/imitation_expectimax2_200k/latest.pt --seeds 1000:1200 --no-append`.
+  - Current bottleneck for better learned policies is expectimax-d2 data generation. Serial generation measured roughly 82-88 expert samples/s; the parallel trainer reached roughly 470-517 samples/s here with 8 workers.
+  - Extra RAM alone is not currently important. A beefier machine helps if it has more or faster CPU cores for expectimax label generation.
+  - To scale the best path on another machine: run `python -m threes_rl.train_imitation --run-name imitation_expectimax2_400k_wN_e30 --expert expectimax2 --samples 400000 --epochs 30 --batch-size 1024 --workers <physical-cores> --chunk-size 5000 --device cpu --save-full-dataset --checkpoint-every 5`.
+  - To reuse the saved 200k dataset locally: run `python -m threes_rl.train_imitation --run-name <run> --expert expectimax2 --samples 200000 --epochs <epochs> --batch-size 1024 --workers 1 --dataset-path threes_rl/runs/imitation_expectimax2_200k_w8_e30/dataset.npz --device cpu --checkpoint-every 5`.
+  - Evaluate with `python -m threes_rl.eval --policy ppo:<checkpoint> --seeds 1000:1200 --no-append`.
   - PPO can resume from any `latest.pt` with `python -m threes_rl.train_ppo --run-name <run> --resume <checkpoint> ...`, but the current evidence favors larger expectimax imitation before more PPO.
