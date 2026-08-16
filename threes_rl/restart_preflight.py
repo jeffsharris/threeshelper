@@ -28,6 +28,16 @@ class PruneCandidate:
 
 PRUNE_CANDIDATES = (
     PruneCandidate(
+        "td_phase4_promoted_balanced_restart_r1_v2_20260709",
+        "Original R1 was harm-stopped and killed; its learned tables are permanently non-authoritative.",
+        "ARTIFACT_RETENTION.md sections 'R1 Harm-Stop Retention' and 'R1b Confirmation Retention'; compact attribution evidence retained.",
+    ),
+    PruneCandidate(
+        "td_phase4_incumbent_residual_r1b_v1_20260709",
+        "R1b failed sealed confirmation, was permanently unpromoted, and may not be reused.",
+        "ARTIFACT_RETENTION.md section 'R1b Confirmation Retention'; confirmation, metrics, audits, summaries, and replays retained.",
+    ),
+    PruneCandidate(
         "action_label_default_phase4_basecenter_confreg_swing13_endgame8_medium12_e80_a001_tc_20260706",
         "Base-centered medium-risk value sidecar explicitly recorded as non-promoted.",
         "EXPERIMENT_LOG.md lines 2470-2580; config/progress/meta and continuation conclusions retained.",

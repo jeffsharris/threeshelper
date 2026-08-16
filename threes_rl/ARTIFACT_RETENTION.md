@@ -2080,3 +2080,23 @@ task.
   query, label, game, optimizer step, checkpoint, PPO, development,
   confirmation, human-session read, incumbent/dashboard change, or promotion
   is authorized.
+
+## 2026-08-15 Handoff Cleanup
+
+- The user requested a reviewed cleanup before handing the program to a new
+  training agent. The apply manifest is retained at
+  `runs/forensics/storage_cleanup_20260815/preflight_and_deletion_manifest.json`
+  with a CSV companion.
+- Removed exactly `6,668,898,048` bytes across 798 `.npy` learned-table files
+  from the killed original R1 and permanently unpromoted R1b runs. Both were
+  outside the active incumbent and protected replay set. Their configs,
+  metrics, summaries, audits, metadata, top-game replays, and confirmation
+  evidence remain.
+- Preserved every pre-existing forensic artifact, all four incumbent model
+  components, protected top-three replays, source replays, human provenance,
+  and evaluation manifests.
+- Removed only disposable caches/scratch files and an explicitly approved
+  recovery-only Git ref in addition to those model tables. No user process or
+  retained service was stopped.
+- Free disk increased from `109.94 GiB` to `124.95 GiB`. This cleanup does not
+  alter or reopen any scientific HOLD/KILL decision.

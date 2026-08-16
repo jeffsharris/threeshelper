@@ -21,6 +21,9 @@ details remain in `EXPERIMENT_LOG.md`, decisions in
   post-seal reproducibility issue, but launch headroom was only `2.481632 GiB`
   above the hard 100-GiB floor. It needed another `2.518368 GiB` to satisfy the
   frozen 5-GiB cushion. That recovery was never opened or executed.
+- The 2026-08-15 cleanup restored free disk to `124.95 GiB`, but does not
+  reopen or reinterpret that spent HOLD. Cleanup details are in
+  `STORAGE_CLEANUP_20260815.md`.
 - The local `threes_rl/runs/` tree is evidence/data, not source. It is ignored
   by Git except for the small historical baselines already tracked. Do not
   delete anything under `runs/forensics/` without a reviewed retention
@@ -133,6 +136,8 @@ infrastructure, but is not obliged to continue the exact J2A1 course.
 - Do not inspect or reuse O3/O5 protected episode bodies or quarantined
   checkpoints.
 - Do not retry J2A1 V2 in place or re-query its `3048` completed roots.
+- The killed R1 and unpromoted R1b learned tables were pruned under a reviewed
+  manifest; their compact attribution and confirmation evidence remains.
 - Do not use human actions as labels. Human-session content remains outside the
   machine-only scientific program.
 - Do not promote from a mechanism, continuation, development, or high-score
@@ -258,6 +263,9 @@ Verification on 2026-08-15:
 - `compileall` over `threes_rl` and `tests`: PASS.
 - Artifact-independent simulator/evaluator selection: `102 passed`.
 - Current V3A1 focused suite: `43 passed`.
+- Git object integrity after cleanup: PASS, zero garbage.
+- Workspace cleanup: `15.01 GiB` reclaimed and `124.95 GiB` free; see
+  `STORAGE_CLEANUP_20260815.md`.
 - Unfiltered historical suite: `1804 passed`, `69 failed`, `1 skipped`.
   The failures are expected chronology/operational incompatibilities in old
   tests: they assert that later-created immutable namespaces are still absent,
