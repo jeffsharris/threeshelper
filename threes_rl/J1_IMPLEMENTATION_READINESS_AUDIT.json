@@ -1,0 +1,287 @@
+{
+  "version": "j1_implementation_readiness_audit_v1",
+  "canonical_payload_sha256": "5b6b9a2383296f82b6547bbd46ddc892b486e4b89f4c325aa88f9c8b15944f99",
+  "frozen_at": "2026-07-27",
+  "proposal": {
+    "path": "threes_rl/J1_NORMAL_START_JOINT_POLICY_VALUE_PROPOSAL.md",
+    "sha256": "26b225c282fb4b58e11484210cf1f45de273714b1b35054f8670081032980bb2"
+  },
+  "course_boundary": {
+    "o6_authoritative_terminal": "HOLD_O6_DATA_PREFLIGHT",
+    "o6_result_path": "threes_rl/runs/forensics/o6_competing_risks_p0_execution_v1/O6_P0_RESULT.json",
+    "o6_result_file_sha256": "4cc27d5ec374eeaf5f14189977a36b9e99ab4411606cdc78f5d94be50a3376a4",
+    "o6_result_payload_sha256": "2f37353ea88b71afba4fc81866f6709992a2af861918430ee7630358314a7bc4",
+    "o6_research_course": "KILL_FURTHER_O6_CONTINUATION_OR_RETRY",
+    "o6_is_scientific_evidence": false,
+    "o5_checkpoints_authoritative": false,
+    "o5_checkpoints_quarantined": true,
+    "historical_locks_changed": false
+  },
+  "source_identities": {
+    "threes_rl/train_ppo.py": "cb2cb301630001ed887e1131c46bc6565e41917ea861ebe836ba9c39990fc6f3",
+    "threes_rl/train_td.py": "0ef18c38c09516a11fddc5b2cd742aa536c21615d5ce2477167bed8553b13f7a",
+    "threes_rl/ntuple.py": "bdd38ec758ca1786b67a7550b3a2792cbd517176ad99e4df7c5ddd2584953789",
+    "threes_rl/obs.py": "7fe9fdc48da826dfde424391b57d8d9de812aa48bb08e129079ed9f3fd3478b1",
+    "threes_rl/env.py": "9b3a65fff503ab5b40db63e11c5c4b3c03f96bd4034709d80cad707cf40f2ddf",
+    "threes_rl/eval.py": "df0a558014583fcfd24fd8ddf48988e375ad9a6fc5199d35311c40d8b6a3f705",
+    "threes_rl/o2_online_option_preflight.py": "99e61f551d607e3b5b8457b7e76a17c8540f0e1d88afec3fa544296bdcd05fda",
+    "threes_rl/sim.py": "67e7a245c05e59367402095ad018122fb4cb1ef08664bf28bf4bc03a02a73072",
+    "threes_rl/current_incumbent_policy.txt": "d85a91576b8dc0ad80c2ed041dd1a0d62498eac9edb48445cb73233bb5454dd4"
+  },
+  "runtime_facts": {
+    "python": "3.14.3",
+    "torch": "2.12.1",
+    "gymnasium": "1.3.0",
+    "numpy": "2.4.3",
+    "scipy": "1.17.1",
+    "mps_available": false,
+    "cuda_available": false,
+    "selected_device": "cpu",
+    "full_observation_width": 282,
+    "existing_actor_critic_parameters": 410117,
+    "j1_parameters": 411656,
+    "auxiliary_parameter_increment": 1539
+  },
+  "implementation_choices": [
+    {
+      "id": "joint_policy_value_ppo",
+      "selected": true,
+      "code_basis": [
+        "threes_rl/train_ppo.py",
+        "threes_rl/obs.py",
+        "threes_rl/env.py"
+      ],
+      "facts": [
+        "Direct four-action policy and scalar value heads exist.",
+        "The full observation contains board, preview, and deck-cycle context.",
+        "Legal-action masking and full actor control exist as code patterns.",
+        "A three-logit auxiliary head yields exactly 411656 parameters."
+      ],
+      "implementation_ready_now": false,
+      "blocking_gaps": [
+        "Existing GAE uses done_buf[t+1] for nonfinal transition masking; transition-t correctness is unproven.",
+        "Existing resume omits vector-environment and Python/NumPy/Torch/simulator RNG states.",
+        "Existing defaults use starter_tile=1536 instead of starter_tile=None.",
+        "Existing fixed rollout chunks do not enforce complete-root batching and root-equal loss weight."
+      ]
+    },
+    {
+      "id": "ntuple_td_value_actor",
+      "selected": false,
+      "code_basis": [
+        "threes_rl/train_td.py",
+        "threes_rl/ntuple.py"
+      ],
+      "facts": [
+        "N-step TD, temporal coherence, induced search action selection, and deterministic table save/load exist.",
+        "The principal value basis is board-afterstate based and has no direct policy head.",
+        "Acting remains coupled to search and does not natively consume the full 282-value context."
+      ],
+      "rejection": "Less direct sustained policy learning and closer to spent R1b value-only machinery."
+    }
+  ],
+  "selected_design": {
+    "model": "282-512-512 shared ReLU body; policy4, value1, auxiliary3 heads",
+    "parameter_count": 411656,
+    "initialization_seed": 2026072806,
+    "starter_tile": null,
+    "reward": "score_delta * 1e-5",
+    "reward_identity": "sum(score_delta) == final_score - start_score",
+    "auxiliary_labels": [
+      "final maximum tile >=1536",
+      "final maximum tile >=3072",
+      "survive at least 64 additional moves"
+    ],
+    "adaptive_auxiliary_weight": false,
+    "training_roots": 16384,
+    "paired_evaluation_roots": 6144,
+    "total_complete_game_arms": 28672,
+    "rounds": 64,
+    "roots_per_round": 256,
+    "epochs_per_round": 4,
+    "minibatch_size": 4096,
+    "one_final_candidate": true,
+    "checkpoint_selection": false,
+    "human_or_behavior_action_labels": false,
+    "o5_or_o3_weights_or_episode_bodies_used": false
+  },
+  "resource_contract": {
+    "training": {
+      "active_hours_hard_cap": 72,
+      "incremental_storage_gib_hard_cap": 24
+    },
+    "development": {
+      "active_hours_hard_cap": 24,
+      "incremental_storage_gib_hard_cap": 8
+    },
+    "confirmation": {
+      "active_hours_hard_cap": 120,
+      "incremental_storage_gib_hard_cap": 16
+    },
+    "free_disk_gib_hard_floor": 100,
+    "free_disk_gib_target": 120,
+    "projection_required_before_execution": true,
+    "projection_method": "Synthetic maximum-shape transition buffers plus fixed simulator/network fixtures; report per-unit bytes, throughput distributions, peak/retained bytes, and 25% safety margin without game outcomes.",
+    "projection_sealed": false
+  },
+  "prospective_streams": {
+    "consumed_or_reserved_in_this_turn": false,
+    "historical_governance_ceiling": 212999999999,
+    "train": {
+      "rows": 16384,
+      "logical_base": 213000000000,
+      "deck_base": 214000000000,
+      "slot_base": 215000000000,
+      "candidate_policy_base": 216000000000
+    },
+    "development": {
+      "paired_roots": 1024,
+      "logical_base": 217000000000,
+      "deck_base": 218000000000,
+      "slot_base": 219000000000,
+      "candidate_policy_base": 220000000000,
+      "control_policy_base": 221000000000
+    },
+    "confirmation": {
+      "paired_roots": 5120,
+      "logical_base": 222000000000,
+      "deck_base": 223000000000,
+      "slot_base": 224000000000,
+      "candidate_policy_base": 225000000000,
+      "control_policy_base": 226000000000
+    },
+    "future_preflight_requirements": [
+      "Seal a compact protected root and stream denylist from authoritative governance manifests and intervals.",
+      "Seal exact row and root-id manifests before any marker.",
+      "Fail on any unknown stream namespace at or above 213B or any collision.",
+      "Do not implement a schema-heterogeneous global payload parser."
+    ]
+  },
+  "power_contract": {
+    "score": {
+      "paired_log_score_sd_assumption": 1.25,
+      "meaningful_relative_effect": 0.07,
+      "development": {
+        "n_pairs": 1024,
+        "mde_80pct_relative": 0.11564969641400724,
+        "power_at_7pct": 0.40986098707230906
+      },
+      "confirmation": {
+        "n_pairs": 5120,
+        "mde_80pct_relative": 0.050159103285112305,
+        "power_at_7pct": 0.9721287292167085
+      }
+    },
+    "progression": {
+      "endpoint": "P1536",
+      "historical_starter_1536_p3072_calibration_reused": false,
+      "control_base_rate_sensitivity": [
+        0.02,
+        0.04,
+        0.08,
+        0.15
+      ],
+      "paired_coupling_sensitivity": [
+        0.0,
+        0.05,
+        0.1
+      ],
+      "stream_strata": 8,
+      "datasets_per_cell": 768,
+      "whole_root_bootstraps_per_dataset": 199,
+      "odds_ratio_grid": [
+        1.25,
+        1.5,
+        1.75,
+        2.0,
+        2.5,
+        3.0
+      ],
+      "point_gate": 1.25,
+      "lower_95_gate": 1.0,
+      "development": {
+        "n_pairs": 1024,
+        "worst_power_or_1_50": 0.30078125,
+        "mde_80pct_grid": 2.5,
+        "mde_grid_power": 0.9453125
+      },
+      "confirmation": {
+        "n_pairs": 5120,
+        "worst_power_or_1_50": 0.8854166666666666,
+        "mde_80pct_grid": 1.5
+      },
+      "base_rate_below_2pct_decision": "HOLD_J1_PROGRESSION_UNDERPOWERED"
+    },
+    "new_policy_outcomes_opened": 0
+  },
+  "mandatory_implementation_tests": [
+    "Hand-computed terminal/nonterminal GAE fixture proving transition-t done masking.",
+    "Crafted and random complete-game score-delta telescoping identity.",
+    "starter_tile=None at every train, development, and confirmation reset.",
+    "Complete-root batching and root-equal transition weights.",
+    "Split exogenous stream determinism and legal-action masking.",
+    "Crash/resume at pre-action, post-step, mid-vector-game, pre-update, and post-checkpoint boundaries.",
+    "Bit-identical resumed simulator/vector state, actions, RNG states, optimizer/model tensors, roots, and final checkpoint.",
+    "Synthetic-buffer and fixture-only runtime/storage projection for all 28672 complete game arms under frozen phase caps.",
+    "Development and confirmation manifests sealed before any development outcome opens.",
+    "Forbidden O3/O5/human/protected artifact access fails closed."
+  ],
+  "current_operational_audit": {
+    "method": "read-only escalated local audit; no active-session content read",
+    "free_disk_gib": 142.33219146728516,
+    "free_disk_above_100_gib": true,
+    "target_120_gib_met": true,
+    "unrelated_heavy_processes": [],
+    "one_heavy_job_gate": true,
+    "port_8765_open": true,
+    "port_8770_open": true,
+    "recorder_status": "ok",
+    "advisor_ready": true,
+    "advisor_policy_sha256": "d85a91576b8dc0ad80c2ed041dd1a0d62498eac9edb48445cb73233bb5454dd4",
+    "dashboard_top_three": [
+      263670,
+      261369,
+      258561
+    ],
+    "active_human_session_content_read": false
+  },
+  "readiness_checks": {
+    "exactly_two_choices_compared": true,
+    "one_choice_selected_before_outcomes": true,
+    "selected_architecture_and_schedule_frozen": true,
+    "normal_start_is_starter_none": true,
+    "true_objective_dense_reward_identity_frozen": true,
+    "auxiliary_weights_nonadaptive": true,
+    "full_policy_exposure_frozen": true,
+    "prospective_stream_ranges_frozen_but_unused": true,
+    "development_and_confirmation_counts_frozen": true,
+    "power_and_mde_reported": true,
+    "historical_starter_calibration_not_misapplied": true,
+    "current_train_ppo_implementation_ready": false,
+    "j1_runner_and_resume_tests_exist": false,
+    "compact_denylist_sealed": false,
+    "execution_preflight_sealed": false,
+    "outcome_free_runtime_storage_projection_sealed": false,
+    "no_forbidden_work": true
+  },
+  "forbidden_work_counts": {
+    "j1_games": 0,
+    "j1_streams_consumed": 0,
+    "j1_labels": 0,
+    "j1_optimizer_steps": 0,
+    "j1_checkpoints": 0,
+    "j1_policy_outcomes": 0,
+    "j1_score_outcomes": 0,
+    "human_sessions_inspected": 0,
+    "incumbent_changes": 0,
+    "dashboard_changes": 0
+  },
+  "decision": "CONTINUE_J1_IMPLEMENTATION_PREFLIGHT",
+  "execution_status": "HOLD_J1_IMPLEMENTATION_NOT_READY",
+  "status": {
+    "CONTINUE": "J1 runner, focused tests, compact denylist, and zero-work preflight after research-lead review",
+    "HOLD": "all J1 streams, games, training, checkpoints, development, confirmation, and execution",
+    "KILL": "further O6 continuation or retry; prior permanent kills remain",
+    "PROMOTE": false
+  }
+}

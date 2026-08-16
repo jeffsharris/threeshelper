@@ -1,0 +1,4 @@
+# Current frozen incumbent actor for July 7 diagnostics/evals.
+# parent MC1000 + student1 w=0.25 + replay-cal w=0.05 on mid
+# + action-label sidecar w=0.10 on endgame.
+ntuple_phaseblend_expectimax2:threes_rl/runs/td_default_corner2_mc_1000_init3000_a0005_20260706/latest:threes_rl/runs/td_default_student1_nstep_tc_50_from_mc1000_20260706/latest:0.25:all:threes_rl/runs/replay_cal_phase4_late_midlate_top13_e3_a001_tc_20260706/latest:0.05:mid:threes_rl/runs/action_label_default_phase4_swing13_endgame8_e50_a001_tc_20260706/latest:0.10:endgame

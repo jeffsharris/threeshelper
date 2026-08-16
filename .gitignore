@@ -2,13 +2,23 @@
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
+.env.1password
 
 out_tiles/
 tmp_*.png
 
 datasets/state_hunt/
-datasets/human_watch/
+datasets/human_watch/*
+!datasets/human_watch/
+!datasets/human_watch/README.md
+datasets/human_play/
 
 threes_rl/runs/eval/*.csv
 threes_rl/runs/*/checkpoint_epoch_*.pt
 threes_rl/runs/*/dataset.npz
+
+# Scientific runs and forensic evidence are local, hash-bound artifacts. Their
+# decisions and identities are checked in as documentation; the multi-gigabyte
+# payloads themselves are deliberately not Git source.
+threes_rl/runs/

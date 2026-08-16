@@ -3,9 +3,8 @@ import unittest
 
 import numpy as np
 
-import state_hunt as sh
 import window_stream as ws
-from threes_rl.sim import ThreesSim, board_to_tokens, label_for_insert_value
+from threes_rl.sim import ThreesSim, label_for_insert_value
 
 
 class SimScheduleTests(unittest.TestCase):
@@ -22,14 +21,14 @@ class SimScheduleTests(unittest.TestCase):
                 state, info = sim.step(state, action)
                 if info.terminal_merge:
                     break
-                check = sh.preview_check_from_snapshot(
-                    before_snapshot,
-                    board_to_tokens(state.board),
-                    state.preview.label,
-                    inserted_values=[info.inserted_value],
-                )
-                self.assertTrue(check["valid"], check.get("reason"))
-                self.assertEqual(check["next_snapshot"], sim.tile_cycle_snapshot(state))
+                cycle = ws.TileCycle()
+                cycle.restore(before_snapshot)
+                cycle.update(label_for_insert_value(info.inserted_value))
+                cycle.set_max_tile(state.max_tile)
+                self.assertEqual(cycle.snapshot(), sim.tile_cycle_snapshot(state))
+
+                ok, reason = ws.preview_possible(cycle, state.preview.label)
+                self.assertTrue(ok, reason)
                 checked += 1
         self.assertGreaterEqual(checked, 1000)
 

@@ -4,8 +4,60 @@ This report summarizes the current RL work so a stronger model or a future
 agent can pick up the research without rediscovering the same facts. The short
 version: the simulator appears solid, behavior cloning from expectimax2 gives a
 real but modest learned-policy gain, sparse PPO from scratch is not yet useful,
-and the next meaningful work should focus on better expert targets and
-distribution-shift reduction rather than simply adding RAM.
+and the next meaningful work should focus on exact-model search plus learned
+afterstate values rather than simply adding RAM.
+
+## 2026-07-05 Update: Research Plan V2 Supersedes The Imitation-First Plan
+
+`threes_rl/RESEARCH_PLAN_V2.md` reframed the problem around the key corrected
+metric: score excluding the free 1536 starter tile and max tile excluding that
+starter. On that metric, imitation from `expectimax2` is not merely below human
+level; the teacher itself almost never builds a meaningful high tile beyond the
+starter. The old DAgger recommendation below is therefore historical context,
+not the current first choice.
+
+Current best corrected-start baseline:
+
+- `corner2`, seeds 1000:1200: mean score 74323.59, mean score-minus-starter
+  15274.59, mean moves 163.785.
+- It built a non-starter 3072 in 3/200 games and reached non-starter 6144 in
+  0/200.
+- Top replays and chart:
+  `threes_rl/runs/eval_artifacts/corner2_1000_1200_fixed_starter/`.
+
+TD n-tuple status:
+
+- `threes_rl/ntuple.py` and `threes_rl/train_td.py` now implement an afterstate
+  value table, exact expected-spawn action targets via
+  `ThreesSim.transition_outcomes()`, checkpointing, progress charts, and
+  top-three replay retention.
+- Pure self-play smoke:
+  `td_default_expected_500_init3000_a005_20260705`: held-out seeds 1000:1050
+  reached mean score 65842.98, mean score-minus-starter 6793.98, mean moves
+  100.44, high score 88443, and no non-starter 1536s.
+- Learned-leaf search:
+  `ntuple_expectimax2:td_default_expected_500_init3000.../latest` on seeds
+  1000:1010 reached mean score-minus-starter 9837 and high score 81852. Search
+  helps the value table, but the self-play table is still weak.
+- Corner2 Monte Carlo bootstrap:
+  `td_default_corner2_mc_50_init3000_a005_20260705` trains the n-tuple table on
+  actual remaining returns from 50 `corner2` actor games. The training run
+  retained a 194271-score / non-starter-3072 replay. The resulting
+  `ntuple_expectimax2` probe on seeds 1000:1010 reached mean
+  score-minus-starter 13832.7 and high score 87888.
+- Larger corner2-MC bootstrap:
+  200 actor games with `alpha=0.05` made learned-search worse, but the same 200
+  actor games with `alpha=0.01` produced the current best learned-search probe:
+  seeds 1000:1050 mean score 77139.78, mean score-minus-starter 18090.78, high
+  score 205719, and 2/50 held-out games with a non-starter 3072. The full
+  200-seed combined eval settled to mean score-minus-starter 15251.805, high
+  score 205719, and 3/200 non-starter 3072 games, effectively tying `corner2`
+  rather than clearly beating it.
+- Interpretation: bootstrapping from strong trajectories is the right direction,
+  but update rate matters and the current n-tuple/search setup has not yet
+  broken past the `corner2` ceiling. The next likely upgrade is either a larger
+  lower-alpha corner2-MC value dataset with better weighting for rare high-return
+  trajectories, or search profiling/caching so adaptive depth becomes feasible.
 
 ## Current State
 
@@ -27,16 +79,23 @@ The simulator does not use screen capture or iPhone Mirroring. It tracks the
 internal board, preview, bag, bonus schedule, legal moves, random spawn slot,
 and final scoring directly. This is the right architecture for fast training.
 
-The current best learned checkpoint is:
+The current local best learned checkpoint is:
 
 ```text
-threes_rl/runs/imitation_expectimax2_200k_w8_e30/checkpoint_epoch_20.pt
+threes_rl/runs/imitation_expectimax2_400k_w10_e30_20260705/checkpoint_epoch_25.pt
 ```
 
-The dataset used to train it is committed:
+The dataset used to train the current local best is generated locally:
+
+```text
+threes_rl/runs/imitation_expectimax2_400k_w10_e30_20260705/dataset.npz
+```
+
+The earlier 200k dataset/checkpoint baseline is committed:
 
 ```text
 threes_rl/runs/imitation_expectimax2_200k_w8_e30/dataset.npz
+threes_rl/runs/imitation_expectimax2_200k_w8_e30/checkpoint_epoch_20.pt
 ```
 
 ## Rule And Simulator Confidence
@@ -60,9 +119,8 @@ Residual simulator risks:
 
 - The fresh-game start model is empirical. It uses exactly 8 small board tiles
   plus one `starter_tile`, defaulting to 1536 because that was observed on the
-  recorded device.
-- Initial board positions are sampled uniformly. Recorded starts did not show
-  a pattern worth modeling, but this is an assumption.
+  recorded device. The starter tile is fixed in the top-left corner, and the 8
+  small board tiles are sampled uniformly among the remaining cells.
 - The bonus tile schedule is modeled from the tracker reverse-engineering and
   verified against `TileCycle`; if the tracker model is wrong in a rare edge
   case, the RL simulator will inherit that error.
@@ -103,6 +161,7 @@ Fixed 200-seed eval suite: seeds `1000:1200`, default starter tile 1536.
 | expectimax3 probe, 5 seeds | 76954.80 | 79929.00 | 81306 | 142.20 |
 | imitation expectimax2 30k | 60848.28 | 59610.00 | 65838 | 47.37 |
 | imitation expectimax2 200k epoch 20 | 61826.34 | 61048.50 | 66237 | 60.81 |
+| imitation expectimax2 400k epoch 25 | 62154.87 | 61236.00 | 66786 | 63.42 |
 
 Wider 1000-seed sanity check, seeds `1000:2000`:
 
@@ -110,6 +169,7 @@ Wider 1000-seed sanity check, seeds `1000:2000`:
 | --- | ---: | ---: | ---: | ---: |
 | greedy | 60224.63 | 59475.00 | 61644 | 39.02 |
 | imitation expectimax2 200k epoch 20 | 61489.74 | 60354.00 | 66072 | 59.97 |
+| imitation expectimax2 400k epoch 25 | 61814.26 | 60661.50 | 66573 | 62.12 |
 
 Interpretation:
 
@@ -119,6 +179,9 @@ Interpretation:
   per game on the current machine, so it is too slow to use naively.
 - Current scores are heavily influenced by the 1536 starter tile. Max-tile
   threshold metrics up through `>=1536` are therefore not informative.
+- The listed learned-policy checkpoints were trained before the starter tile
+  was fixed to the top-left corner, so treat them as pre-fix baselines until
+  retrained.
 
 ## Training Findings
 
@@ -137,6 +200,8 @@ Observed progression:
   about 90 percent, but eval regressed to 60896.19 mean score.
 - Expectimax2 imitation, 200k samples, epoch 20: best current learned score,
   61826.34 mean score.
+- Expectimax2 imitation, 400k samples, epoch 25: current local best learned
+  score, 62154.87 mean score.
 - Expectimax2 imitation, 200k samples, epoch 30: lower than epoch 20.
 
 Takeaway: more supervised accuracy is not the same as better gameplay. The
@@ -357,7 +422,7 @@ Recommended first DAgger experiment:
 ```bash
 .venv/bin/python -m threes_rl.train_dagger \
   --run-name dagger_ex2_rounds3_50k \
-  --base-checkpoint threes_rl/runs/imitation_expectimax2_200k_w8_e30/checkpoint_epoch_20.pt \
+  --base-checkpoint threes_rl/runs/imitation_expectimax2_400k_w10_e30_20260705/checkpoint_epoch_25.pt \
   --expert expectimax2 \
   --rounds 3 \
   --samples-per-round 50000 \
@@ -382,8 +447,8 @@ Evaluate after each round:
 Success criterion for this phase:
 
 ```text
-Beat 61826.34 mean score on seeds 1000:1200.
-Beat 61489.74 mean score on seeds 1000:2000.
+Beat 62154.87 mean score on seeds 1000:1200.
+Beat 61814.26 mean score on seeds 1000:2000.
 Move materially closer to expectimax2's 66460.14 on seeds 1000:1200.
 ```
 

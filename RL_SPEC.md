@@ -150,9 +150,10 @@ events):
   first bag (reference: `window_stream.seed_tile_cycle_from_initial_state`,
   which reconstructs exactly this. Observed per-color counts on the 8 board
   tiles never exceed 4 ✓).
-- Tile positions: place the 9 board tiles uniformly at random on distinct
-  cells (recorded starts show no positional pattern worth modeling; note this
-  assumption in the docstring).
+- Tile positions: when `starter_tile` is set, place that starter in the
+  top-left cell. Place the 8 small board tiles uniformly at random on distinct
+  cells among the remaining 15 cells. When `starter_tile is None`, place the 8
+  small board tiles uniformly at random on distinct cells among all 16 cells.
 - The starter tile counts toward `max_tile` (with a 1536 starter, bonus
   eligibility is active from the start and the initial bonus support is 6…384).
 

@@ -1,6 +1,9 @@
 Threes helper – preview detector
 ================================
 
+Current RL research status, failures, protected artifacts, and harness commands
+are summarized in [`threes_rl/RL_PROGRAM_HANDOFF.md`](threes_rl/RL_PROGRAM_HANDOFF.md).
+
 Environment
 -----------
 
@@ -158,6 +161,29 @@ python3 observe_human_game.py --no-open-dashboard
 python3 observe_human_game.py --max-recovery-depth 2
 python3 observe_human_game.py --max-games 3
 ```
+
+After recording a strong human session, import it into the Threes RL
+diagnostic pipeline:
+```bash
+.venv/bin/python -m threes_rl.human_diagnostics_pipeline \
+  --events-jsonl datasets/human_watch/<session>/events.jsonl \
+  --policy-file threes_rl/current_incumbent_policy.txt \
+  --out-dir threes_rl/runs/human_diagnostics/<session>
+```
+Or scan the human-watch inbox and process every new or changed session:
+```bash
+.venv/bin/python -m threes_rl.human_diagnostics_batch --run
+```
+   - The pipeline writes imported replay JSON/HTML, high-board reservoir
+     records, pre-promotion transition windows, human-root support-ladder
+     windows, policy-agreement diagnostics, and a no-label top-two scan.
+   - The batch command writes `threes_rl/runs/human_diagnostics/human_diagnostics_batch.html`
+     and skips sessions whose diagnostics are already current unless
+     `--force` is supplied.
+   - Good research input is at least five independent human games reaching
+     non-starter `1536`, with one or more reaching `3072`.
+   - Treat these artifacts as diagnostics first; do not promote a policy
+     change until direct milestone labels are stable on held-out human roots.
 
 Latency benchmarking:
 ```bash

@@ -214,7 +214,8 @@ def score_board(board: Sequence[Sequence[int]] | np.ndarray) -> int:
     total = 0
     for value in arr.reshape(-1):
         value_int = int(value)
-        total += SCORE_BY_VALUE.get(value_int, score_tile(value_int))
+        cached = SCORE_BY_VALUE.get(value_int)
+        total += cached if cached is not None else score_tile(value_int)
     return int(total)
 
 
@@ -297,9 +298,53 @@ def label_for_insert_value(value: int) -> str:
 
 
 class ThreesSim:
-    def __init__(self, rng: np.random.Generator, starter_tile: Optional[int] = 1536):
-        self.rng = rng
+    def __init__(
+        self,
+        rng: np.random.Generator | None = None,
+        starter_tile: Optional[int] = 1536,
+        *,
+        deck_rng: np.random.Generator | None = None,
+        slot_rng: np.random.Generator | None = None,
+        deck_stream_id: int | None = None,
+        slot_stream_id: int | None = None,
+    ):
+        if rng is not None and (deck_rng is not None or slot_rng is not None):
+            raise ValueError("Pass either legacy rng or split deck_rng/slot_rng, not both")
+        if rng is None and (deck_rng is None or slot_rng is None):
+            raise ValueError("Split-stream simulation requires both deck_rng and slot_rng")
+        self._legacy_single_rng = rng is not None
+        self.deck_rng = rng if rng is not None else deck_rng
+        self.slot_rng = rng if rng is not None else slot_rng
+        if self.deck_rng is None or self.slot_rng is None:
+            raise RuntimeError("Simulator RNG streams were not initialized")
+        self.rng = self.deck_rng
         self.starter_tile = starter_tile
+        self.deck_stream_id = deck_stream_id
+        self.slot_stream_id = slot_stream_id
+
+    @classmethod
+    def from_stream_ids(
+        cls,
+        *,
+        deck_stream_id: int,
+        slot_stream_id: int,
+        starter_tile: Optional[int] = 1536,
+    ) -> "ThreesSim":
+        return cls(
+            starter_tile=starter_tile,
+            deck_rng=np.random.default_rng(int(deck_stream_id)),
+            slot_rng=np.random.default_rng(int(slot_stream_id)),
+            deck_stream_id=int(deck_stream_id),
+            slot_stream_id=int(slot_stream_id),
+        )
+
+    def stream_metadata(self) -> dict[str, object]:
+        return {
+            "evaluator_version": "split_exogenous_v1" if not self._legacy_single_rng else "legacy_single_rng_v1",
+            "deck_stream_id": self.deck_stream_id,
+            "slot_stream_id": self.slot_stream_id,
+            "slot_mapping": "shared_uniform_to_legal_index" if not self._legacy_single_rng else "legacy_integers",
+        }
 
     def reset(self) -> SimState:
         small_counts = {"red": 4, "blue": 4, "gray": 4}
@@ -317,10 +362,13 @@ class ThreesSim:
         preview = preview_from_label(preview_label)
 
         values = [SMALL_TILE_VALUES[label] for label in board_labels]
-        if self.starter_tile is not None:
-            values.append(int(self.starter_tile))
-        positions = self.rng.choice(BOARD_SIZE * BOARD_SIZE, size=len(values), replace=False)
         board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int32)
+        if self.starter_tile is not None:
+            board[0, 0] = int(self.starter_tile)
+            candidate_positions = np.arange(1, BOARD_SIZE * BOARD_SIZE)
+        else:
+            candidate_positions = np.arange(BOARD_SIZE * BOARD_SIZE)
+        positions = self.slot_rng.choice(candidate_positions, size=len(values), replace=False)
         for flat_pos, value in zip(positions.tolist(), values):
             board[flat_pos // BOARD_SIZE, flat_pos % BOARD_SIZE] = value
 
@@ -384,7 +432,7 @@ class ThreesSim:
                 terminal_merge=True,
             )
 
-        pos_idx = int(self.rng.integers(len(eligible_positions)))
+        pos_idx = self._sample_slot_index(len(eligible_positions))
         inserted_pos = eligible_positions[pos_idx]
         inserted_value = self._sample_insert_value(state.preview)
         board_after = shifted.copy()
@@ -402,7 +450,13 @@ class ThreesSim:
         )
         return next_state, info
 
-    def transition_outcomes(self, state: SimState, action: Direction, include_info: bool = True) -> list[tuple[float, SimState, StepInfo]]:
+    def transition_outcomes(
+        self,
+        state: SimState,
+        action: Direction,
+        include_info: bool = True,
+        include_next_preview: bool = True,
+    ) -> list[tuple[float, SimState, StepInfo]]:
         if state.game_over:
             return []
         before_score = score_board(state.board) if include_info else 0
@@ -439,15 +493,18 @@ class ThreesSim:
                     state.preview.label,
                 )
                 max_tile = board_max_tile(board_after)
-                preview_options = self.preview_options(
-                    consumed[0],
-                    consumed[1],
-                    consumed[2],
-                    consumed[3],
-                    consumed[4],
-                    max_tile,
-                )
                 score_delta = score_board(board_after) - before_score if include_info else 0
+                if include_next_preview:
+                    preview_options = self.preview_options(
+                        consumed[0],
+                        consumed[1],
+                        consumed[2],
+                        consumed[3],
+                        consumed[4],
+                        max_tile,
+                    )
+                else:
+                    preview_options = [PreviewOption(Preview("ignored", None), 1.0)]
                 for preview_option in preview_options:
                     next_state = SimState(
                         board=board_after.copy(),
@@ -579,12 +636,12 @@ class ThreesSim:
     ) -> Preview:
         options = self.preview_options(small_counts, small_pos, small_seen_total, span_small_pos, large_pending, max_tile)
         probs = np.asarray([option.probability for option in options], dtype=np.float64)
-        idx = int(self.rng.choice(len(options), p=probs))
+        idx = int(self.deck_rng.choice(len(options), p=probs))
         return options[idx].preview
 
     def _sample_small_label(self, small_counts: dict[str, int], small_pos: int) -> str:
         slots = max(1, SMALL_BAG_SIZE - int(small_pos))
-        draw = int(self.rng.integers(slots))
+        draw = int(self.deck_rng.integers(slots))
         cumulative = 0
         for label in SMALL_LABELS:
             cumulative += max(0, int(small_counts[label]))
@@ -602,8 +659,16 @@ class ThreesSim:
             return int(preview.value)
         if not preview.candidates:
             raise RuntimeError(f"Bonus preview missing candidates: {preview}")
-        idx = int(self.rng.integers(len(preview.candidates)))
+        idx = int(self.deck_rng.integers(len(preview.candidates)))
         return int(preview.candidates[idx])
+
+    def _sample_slot_index(self, slot_count: int) -> int:
+        if slot_count <= 0:
+            raise ValueError("slot_count must be positive")
+        if self._legacy_single_rng:
+            return int(self.slot_rng.integers(slot_count))
+        uniform = float(self.slot_rng.random())
+        return min(slot_count - 1, int(uniform * slot_count))
 
     def _insert_value_options(self, preview: Preview) -> list[tuple[int, float]]:
         if preview.kind != "bonus":

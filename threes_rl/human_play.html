@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threes Human Play</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #151719;
+      --surface: #202326;
+      --surface-2: #2b2f32;
+      --board: #cbc7bf;
+      --slot: #b6b1a8;
+      --line: #3e4346;
+      --text: #f5f4ef;
+      --muted: #aeb4b4;
+      --blue: #67c7df;
+      --red: #ef6f79;
+      --white: #f7f4e9;
+      --green: #88c894;
+      --yellow: #e7c95f;
+      --orange: #e79a62;
+      --danger: #f07b78;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button { font: inherit; }
+    main {
+      width: min(1080px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 18px 0 28px;
+    }
+    header {
+      min-height: 58px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 18px;
+    }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 22px; letter-spacing: 0; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .status-dot.busy { background: var(--yellow); }
+    .status-dot.error { background: var(--danger); }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 560px) minmax(260px, 1fr);
+      gap: 22px;
+      align-items: start;
+    }
+    .game-column { display: grid; gap: 14px; }
+    .preview-zone {
+      min-height: 128px;
+      display: grid;
+      justify-items: center;
+      align-content: end;
+      gap: 7px;
+    }
+    .board {
+      width: 100%;
+      aspect-ratio: 1;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-rows: repeat(4, minmax(0, 1fr));
+      gap: 9px;
+      padding: 10px;
+      background: var(--board);
+      border: 1px solid #e3dfd5;
+      border-radius: 8px;
+      box-shadow: 0 14px 40px rgba(0,0,0,.26);
+    }
+    .tile {
+      min-width: 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: var(--slot);
+      color: transparent;
+      border: 1px solid rgba(31,34,36,.14);
+      border-radius: 7px;
+      font-size: 32px;
+      font-weight: 850;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+      user-select: none;
+      transition: transform 90ms ease, filter 90ms ease;
+    }
+    .tile.filled { color: #303235; }
+    .tile.changed { transform: scale(.96); filter: brightness(1.08); }
+    .tile.v1 { background: var(--blue); color: #183a43; }
+    .tile.v2 { background: var(--red); color: #4c1e24; }
+    .tile.v3 { background: var(--white); color: #4d5152; }
+    .tile.v6 { background: var(--white); color: #3c87a0; }
+    .tile.v12 { background: var(--white); color: #b7525d; }
+    .tile.v24 { background: #dfe9d4; color: #52714d; }
+    .tile.v48, .tile.v96 { background: var(--green); color: #27442c; }
+    .tile.v192, .tile.v384 { background: var(--yellow); color: #51451b; }
+    .tile.v768 { background: var(--orange); color: #4d2f1c; }
+    .tile.v1536, .tile.v3072 { background: #d97b72; color: #3f2020; font-size: 27px; }
+    .tile.v6144, .tile.v12288 { background: #986ab0; color: #f9f5fb; font-size: 25px; }
+    .control-row {
+      min-height: 50px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .command {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 8px 13px;
+      cursor: pointer;
+      font-weight: 700;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .command:hover, .command:focus-visible { border-color: var(--muted); }
+    .command:disabled { opacity: .45; cursor: default; }
+    .move-buttons {
+      display: grid;
+      grid-template-columns: repeat(3, 44px);
+      grid-template-rows: repeat(2, 40px);
+      gap: 5px;
+    }
+    .move-button {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .move-button:hover, .move-button:focus-visible { border-color: var(--blue); }
+    .move-button:disabled { opacity: .28; cursor: default; }
+    .move-button.recommended {
+      border-color: var(--yellow);
+      background: #4a4327;
+      color: #fff7c7;
+      box-shadow: 0 0 0 2px rgba(231,201,95,.2), 0 0 18px rgba(231,201,95,.18);
+    }
+    .move-button.recommended:disabled { opacity: .72; }
+    .move-button[data-action="up"] { grid-column: 2; grid-row: 1; }
+    .move-button[data-action="left"] { grid-column: 1; grid-row: 2; }
+    .move-button[data-action="down"] { grid-column: 2; grid-row: 2; }
+    .move-button[data-action="right"] { grid-column: 3; grid-row: 2; }
+    .side {
+      display: grid;
+      gap: 18px;
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+    }
+    .cycle-panel {
+      display: grid;
+      gap: 15px;
+    }
+    .cycle-section {
+      display: grid;
+      gap: 9px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid var(--line);
+    }
+    .cycle-section:last-child { padding-bottom: 0; border-bottom: 0; }
+    .cycle-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .cycle-title { font-size: 14px; font-weight: 780; }
+    .cycle-value {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 760;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    .cycle-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .meter {
+      height: 7px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--surface-2);
+    }
+    .meter-fill {
+      height: 100%;
+      background: var(--blue);
+      transition: width 120ms ease;
+    }
+    .meter-fill.plus { background: var(--yellow); }
+    .bag-rows { display: grid; gap: 7px; }
+    .bag-row {
+      display: grid;
+      grid-template-columns: 28px 45px minmax(66px, 1fr) 48px;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .bag-tile {
+      width: 28px;
+      height: 28px;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      font-weight: 850;
+    }
+    .bag-tile.v1 { background: var(--blue); color: #183a43; }
+    .bag-tile.v2 { background: var(--red); color: #4c1e24; }
+    .bag-tile.v3 { background: var(--white); color: #4d5152; }
+    .bag-count { color: var(--muted); }
+    .odds-track {
+      height: 6px;
+      overflow: hidden;
+      border-radius: 3px;
+      background: var(--surface-2);
+    }
+    .odds-fill { height: 100%; background: var(--green); }
+    .bag-percent { text-align: right; }
+    .range-tiles { display: flex; flex-wrap: wrap; gap: 5px; }
+    .range-tile {
+      min-width: 34px;
+      height: 28px;
+      padding: 0 5px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 760;
+      font-variant-numeric: tabular-nums;
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 8px;
+    }
+    .preview {
+      width: 92px;
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 8px;
+      background: var(--white);
+      color: #3f4344;
+      font-size: 40px;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+    .preview.blue { background: var(--blue); color: #183a43; }
+    .preview.red { background: var(--red); color: #4c1e24; }
+    .preview.bonus {
+      width: auto;
+      aspect-ratio: auto;
+      display: flex;
+      gap: 7px;
+      border: 0;
+      background: transparent;
+    }
+    .preview-candidate {
+      width: 58px;
+      height: 58px;
+      min-width: 58px;
+      font-size: 18px;
+      box-shadow: 0 5px 14px rgba(0,0,0,.2);
+    }
+    .preview-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+      min-height: 16px;
+      text-align: center;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .stat {
+      min-height: 78px;
+      padding: 13px 8px 12px 0;
+    }
+    .stat:nth-child(even) { padding-left: 14px; border-left: 1px solid var(--line); }
+    .stat:nth-child(n+3) { border-top: 1px solid var(--line); }
+    .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+    .stat-value { font-size: 24px; font-weight: 780; font-variant-numeric: tabular-nums; }
+    .record {
+      min-height: 48px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    dialog {
+      width: min(420px, calc(100% - 28px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 22px;
+    }
+    dialog::backdrop { background: rgba(0,0,0,.68); }
+    dialog h2 { font-size: 21px; margin-bottom: 14px; }
+    .dialog-score { font-size: 32px; font-weight: 800; margin-bottom: 18px; }
+    .quality-control { display: grid; gap: 8px; margin-bottom: 18px; }
+    .quality-label { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .quality-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .quality-option {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .quality-option[aria-pressed="true"] { border-color: var(--green); color: var(--text); }
+    .dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    @media (max-width: 820px) {
+      main { width: min(620px, calc(100% - 24px)); }
+      .layout { grid-template-columns: 1fr; }
+      .side { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 460px) {
+      main { width: calc(100% - 16px); padding-top: 8px; }
+      header { margin-bottom: 10px; align-items: flex-start; flex-direction: column; justify-content: center; padding: 8px 0 10px; }
+      h1 { font-size: 20px; }
+      .board { gap: 6px; padding: 7px; }
+      .tile { font-size: 25px; }
+      .tile.v1536, .tile.v3072 { font-size: 18px; }
+      .tile.v6144, .tile.v12288 { font-size: 16px; }
+      .preview-zone { min-height: 112px; }
+      .preview { width: 78px; font-size: 34px; }
+      .preview-candidate { width: 50px; height: 50px; min-width: 50px; font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Threes Human Play</h1>
+      <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText">Connecting</span></div>
+    </header>
+
+    <div class="layout">
+      <section class="game-column">
+        <div class="preview-zone">
+          <div class="eyebrow">Next</div>
+          <div class="preview" id="preview">-</div>
+          <div class="preview-meta" id="previewMeta"></div>
+        </div>
+        <div class="board" id="board" aria-label="Threes board"></div>
+        <div class="control-row">
+          <button class="command" id="newGame">New game</button>
+          <div class="move-buttons" aria-label="Move controls">
+            <button class="move-button" data-action="up" title="Up" aria-label="Up">&uarr;</button>
+            <button class="move-button" data-action="left" title="Left" aria-label="Left">&larr;</button>
+            <button class="move-button" data-action="down" title="Down" aria-label="Down">&darr;</button>
+            <button class="move-button" data-action="right" title="Right" aria-label="Right">&rarr;</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <section class="cycle-panel" aria-label="Upcoming tile ranges">
+          <div class="cycle-section">
+            <div class="cycle-heading">
+              <div class="cycle-title">Small-tile bag</div>
+              <div class="cycle-value" id="bagProgress">-</div>
+            </div>
+            <div class="meter" aria-hidden="true"><div class="meter-fill" id="bagMeter"></div></div>
+            <div class="bag-rows" id="bagRows"></div>
+            <div class="cycle-note">Odds for the cue after the visible tile is used.</div>
+          </div>
+          <div class="cycle-section">
+            <div class="cycle-heading">
+              <div class="cycle-title">Plus-block window</div>
+              <div class="cycle-value" id="plusProbability">-</div>
+            </div>
+            <div class="meter" aria-hidden="true"><div class="meter-fill plus" id="plusMeter"></div></div>
+            <div class="cycle-note" id="plusStatus"></div>
+            <div class="range-tiles" id="plusRange" aria-label="Possible plus tiles"></div>
+          </div>
+        </section>
+
+        <section class="stats">
+          <div class="stat"><div class="stat-label">Score</div><div class="stat-value" id="score">-</div></div>
+          <div class="stat"><div class="stat-label">Earned</div><div class="stat-value" id="earned">-</div></div>
+          <div class="stat"><div class="stat-label">Moves</div><div class="stat-value" id="moves">-</div></div>
+          <div class="stat"><div class="stat-label">Max tile</div><div class="stat-value" id="maxTile">-</div></div>
+        </section>
+
+        <section class="record" id="record"></section>
+      </aside>
+    </div>
+  </main>
+
+  <dialog id="gameOver">
+    <h2>Game over</h2>
+    <div class="dialog-score" id="finalScore"></div>
+    <div class="quality-control">
+      <div class="quality-label">Game quality</div>
+      <div class="quality-options">
+        <button class="quality-option" data-quality="good" aria-pressed="false">Good</button>
+        <button class="quality-option" data-quality="mistakes" aria-pressed="false">Mistakes</button>
+        <button class="quality-option" data-quality="calibration-discard" aria-pressed="false">Calibration</button>
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button class="command" id="playAgain">New game</button>
+      <a class="command" id="openReplay" target="_blank" rel="noopener">Replay</a>
+    </div>
+  </dialog>
+
+  <script>
+    const directionKeys = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+    };
+    const board = document.getElementById("board");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const gameOver = document.getElementById("gameOver");
+    const formatter = new Intl.NumberFormat("en-US");
+    let session = null;
+    let busy = false;
+    let renderedAt = performance.now();
+    let previousBoard = [];
+
+    function setStatus(text, kind = "saved") {
+      statusText.textContent = text;
+      statusDot.className = "status-dot" + (kind === "saved" ? "" : ` ${kind}`);
+    }
+
+    function tileClass(value) {
+      return value ? `tile filled v${value}` : "tile";
+    }
+
+    function cycleAfterVisible(state) {
+      const source = state.tile_cycle || {};
+      const cycle = {
+        counts: {...(source.small_counts || {red: 0, blue: 0, gray: 0})},
+        smallPos: Number(source.small_pos || 0),
+        smallSeen: Number(source.small_seen_total || 0),
+        spanPos: Number(source.span_small_pos || 0),
+        plusPending: Boolean(source.large_pending),
+        maxTile: Number(state.max_tile || source.max_tile || 0),
+      };
+      const label = state.preview && state.preview.kind === "bonus" ? "large_candidates" : state.preview.kind;
+      if (label === "large_candidates") {
+        if (cycle.plusPending) cycle.plusPending = false;
+      } else {
+        cycle.smallPos += 1;
+        cycle.smallSeen += 1;
+        if (cycle.smallSeen === 21) {
+          cycle.spanPos = 0;
+          cycle.plusPending = true;
+        } else if (cycle.smallSeen > 21) {
+          cycle.spanPos += 1;
+        }
+        if (Object.hasOwn(cycle.counts, label) && cycle.counts[label] > 0) {
+          cycle.counts[label] -= 1;
+        }
+      }
+      if (cycle.smallPos >= 12) {
+        cycle.counts = {red: 4, blue: 4, gray: 4};
+        cycle.smallPos = 0;
+      }
+      if (cycle.smallSeen >= 21) {
+        cycle.spanPos = Math.min(cycle.spanPos, 20);
+        if (!cycle.plusPending && cycle.spanPos >= 20) {
+          cycle.spanPos = 0;
+          cycle.plusPending = true;
+        }
+      }
+      const plusValues = [];
+      if (cycle.maxTile >= 48) {
+        for (let value = 6; value <= Math.max(6, Math.floor(cycle.maxTile / 4)); value *= 2) {
+          plusValues.push(value);
+        }
+      }
+      const hasPlusBundles = plusValues.length >= 3;
+      const plusProbability = cycle.maxTile >= 48 && cycle.smallSeen >= 21 && cycle.plusPending && hasPlusBundles
+        ? 1 / Math.max(1, 21 - cycle.spanPos)
+        : 0;
+      return {...cycle, plusValues, plusProbability};
+    }
+
+    function renderCycle(state) {
+      const cycle = cycleAfterVisible(state);
+      document.getElementById("bagProgress").textContent = `${cycle.smallPos} / 12 spent`;
+      document.getElementById("bagMeter").style.width = `${(cycle.smallPos / 12) * 100}%`;
+      const smallSlots = Math.max(1, 12 - cycle.smallPos);
+      const smallScale = Math.max(0, 1 - cycle.plusProbability);
+      const rows = [
+        {key: "blue", value: 1},
+        {key: "red", value: 2},
+        {key: "gray", value: 3},
+      ];
+      document.getElementById("bagRows").innerHTML = rows.map(({key, value}) => {
+        const remaining = Math.max(0, Number(cycle.counts[key] || 0));
+        const percent = (remaining / smallSlots) * smallScale * 100;
+        return `<div class="bag-row">
+          <div class="bag-tile v${value}">${value}</div>
+          <div class="bag-count">${remaining} / 4</div>
+          <div class="odds-track"><div class="odds-fill" style="width:${percent}%"></div></div>
+          <div class="bag-percent">${percent.toFixed(1)}%</div>
+        </div>`;
+      }).join("");
+
+      const plusPercent = cycle.plusProbability * 100;
+      document.getElementById("plusProbability").textContent = `${plusPercent.toFixed(1)}% next`;
+      document.getElementById("plusMeter").style.width = `${cycle.smallSeen < 21 ? 0 : (cycle.spanPos / 20) * 100}%`;
+      let status;
+      if (cycle.maxTile < 48) {
+        status = "Locked until a 48 tile is on the board.";
+      } else if (cycle.smallSeen < 21) {
+        const remaining = 21 - cycle.smallSeen;
+        status = `Unlocks after ${remaining} more small ${remaining === 1 ? "preview" : "previews"}.`;
+      } else if (cycle.plusPending) {
+        const slots = Math.max(1, 21 - cycle.spanPos);
+        status = `Live now. One plus cue remains in this span; ${slots} ${slots === 1 ? "slot" : "slots"} left.`;
+      } else {
+        const remaining = Math.max(0, 20 - cycle.spanPos);
+        status = `Plus cue already used; ${remaining} more small ${remaining === 1 ? "preview" : "previews"} to the next span.`;
+      }
+      document.getElementById("plusStatus").textContent = status;
+      const range = document.getElementById("plusRange");
+      range.innerHTML = cycle.plusValues.map((value) => `<div class="range-tile">${value}</div>`).join("");
+      range.hidden = cycle.plusValues.length === 0;
+    }
+
+    function render(payload) {
+      session = payload;
+      const state = payload.state;
+      const values = state.board.flat();
+      board.innerHTML = values.map((value, index) => {
+        const changed = previousBoard.length && previousBoard[index] !== value ? " changed" : "";
+        return `<div class="${tileClass(value)}${changed}" data-value="${value}">${value || ""}</div>`;
+      }).join("");
+      previousBoard = values;
+
+      const preview = state.preview;
+      const previewNode = document.getElementById("preview");
+      previewNode.className = "preview";
+      if (preview.kind === "bonus") {
+        previewNode.classList.add("bonus");
+        previewNode.innerHTML = preview.candidates.map((value) =>
+          `<div class="${tileClass(value)} preview-candidate">${value}</div>`
+        ).join("");
+        document.getElementById("previewMeta").textContent = "Bonus candidates";
+      } else {
+        previewNode.classList.add(preview.kind);
+        previewNode.textContent = String(preview.value ?? "-");
+        document.getElementById("previewMeta").textContent = preview.kind === "gray" ? "White tile" : `${preview.kind[0].toUpperCase()}${preview.kind.slice(1)} tile`;
+      }
+
+      document.getElementById("score").textContent = formatter.format(state.score);
+      document.getElementById("earned").textContent = formatter.format(payload.score_minus_starter);
+      document.getElementById("moves").textContent = formatter.format(state.move_count);
+      document.getElementById("maxTile").textContent = formatter.format(state.max_tile);
+      const mode = payload.restart_root_id ? `Restart ${payload.restart_root_id}` : "Normal start";
+      document.getElementById("record").textContent = `${mode} / ${payload.recorded_frames} frames saved / ${payload.session_id}`;
+      document.querySelectorAll(".quality-option").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.quality === payload.quality_annotation));
+      });
+      renderCycle(state);
+
+      const legal = new Set(state.legal_actions || []);
+      const recommendedAction = payload.recommendation && payload.recommendation.status === "ok"
+        ? payload.recommendation.action
+        : null;
+      document.querySelectorAll(".move-button").forEach((button) => {
+        const recommended = button.dataset.action === recommendedAction && legal.has(button.dataset.action);
+        button.classList.toggle("recommended", recommended);
+        const label = `${button.dataset.action[0].toUpperCase()}${button.dataset.action.slice(1)}`;
+        button.title = recommended ? `${label} - incumbent recommendation` : label;
+        button.setAttribute("aria-label", recommended ? `${label}, incumbent recommendation` : label);
+        button.disabled = busy || state.game_over || !legal.has(button.dataset.action);
+      });
+      setStatus("Saved");
+      renderedAt = performance.now();
+
+      if (state.game_over && !gameOver.open) {
+        document.getElementById("finalScore").textContent = formatter.format(state.score);
+        document.getElementById("openReplay").href = payload.replay_url || "#";
+        gameOver.showModal();
+      }
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {"Content-Type": "application/json", ...(options.headers || {})},
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+      return payload;
+    }
+
+    async function newGame(restartRootId = null) {
+      if (busy) return;
+      busy = true;
+      setStatus("Saving", "busy");
+      try {
+        if (session && session.status === "active") {
+          await api(`/api/games/${session.session_id}/finish`, {method: "POST", body: "{}"});
+        }
+        previousBoard = [];
+        const payload = await api("/api/games", {
+          method: "POST",
+          body: JSON.stringify({starter_tile: 1536, player_id: "jeff", restart_root_id: restartRootId}),
+        });
+        localStorage.setItem("threesHumanPlaySession", payload.session_id);
+        busy = false;
+        render(payload);
+        if (gameOver.open) gameOver.close();
+      } catch (error) {
+        busy = false;
+        setStatus(error.message, "error");
+      }
+    }
+
+    async function annotateQuality(annotation) {
+      if (!session || busy) return;
+      busy = true;
+      setStatus("Saving", "busy");
+      try {
+        const payload = await api(`/api/games/${session.session_id}/quality`, {
+          method: "POST",
+          body: JSON.stringify({annotation}),
+        });
+        busy = false;
+        render(payload);
+      } catch (error) {
+        busy = false;
+        setStatus(error.message, "error");
+      }
+    }
+
+    async function move(action) {
+      if (busy || !session || session.state.game_over) return;
+      busy = true;
+      setStatus("Saving", "busy");
+      document.querySelectorAll(".move-button").forEach((button) => button.disabled = true);
+      try {
+        const payload = await api(`/api/games/${session.session_id}/moves`, {
+          method: "POST",
+          body: JSON.stringify({
+            action,
+            decision_time_ms: Math.max(0, performance.now() - renderedAt),
+          }),
+        });
+        busy = false;
+        render(payload);
+      } catch (error) {
+        busy = false;
+        setStatus(error.message, "error");
+        if (session) render(session);
+      }
+    }
+
+    window.addEventListener("keydown", (event) => {
+      const action = directionKeys[event.key];
+      if (!action) return;
+      event.preventDefault();
+      move(action);
+    }, {passive: false});
+    document.querySelectorAll(".move-button").forEach((button) => {
+      button.addEventListener("click", () => move(button.dataset.action));
+    });
+    document.getElementById("newGame").addEventListener("click", () => newGame());
+    document.getElementById("playAgain").addEventListener("click", () => newGame());
+    document.querySelectorAll(".quality-option").forEach((button) => {
+      button.addEventListener("click", () => annotateQuality(button.dataset.quality));
+    });
+
+    async function boot() {
+      const requestedSession = new URLSearchParams(window.location.search).get("session");
+      const requestedRestart = new URLSearchParams(window.location.search).get("restart");
+      if (requestedRestart && !requestedSession) {
+        await newGame(requestedRestart);
+        return;
+      }
+      const existing = requestedSession || localStorage.getItem("threesHumanPlaySession");
+      if (existing) {
+        try {
+          const payload = await api(`/api/games/${existing}`);
+          render(payload);
+          return;
+        } catch (_error) {
+          if (!requestedSession) localStorage.removeItem("threesHumanPlaySession");
+        }
+      }
+      await newGame();
+    }
+
+    boot();
+  </script>
+</body>
+</html>

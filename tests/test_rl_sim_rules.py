@@ -45,6 +45,14 @@ class SimRuleTests(unittest.TestCase):
         for value, score in expected.items():
             self.assertEqual(score_tile(value), score)
 
+    def test_starter_tile_starts_top_left(self):
+        for seed in range(50):
+            sim = ThreesSim(np.random.default_rng(seed), starter_tile=1536)
+            state = sim.reset()
+            self.assertEqual(int(state.board[0, 0]), 1536)
+            self.assertEqual(int(np.count_nonzero(state.board == 1536)), 1)
+            self.assertEqual(int(np.count_nonzero(state.board)), 9)
+
     def test_base_move_matches_tracker_oracle(self):
         rng = np.random.default_rng(20260705)
         adversarial = [
