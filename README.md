@@ -3,6 +3,8 @@ Threes helper – preview detector
 
 Current RL research status, failures, protected artifacts, and harness commands
 are summarized in [`threes_rl/RL_PROGRAM_HANDOFF.md`](threes_rl/RL_PROGRAM_HANDOFF.md).
+The current disk/RAM allocation is itemized in
+[`threes_rl/STORAGE_AUDIT_20260815.md`](threes_rl/STORAGE_AUDIT_20260815.md).
 
 Environment
 -----------

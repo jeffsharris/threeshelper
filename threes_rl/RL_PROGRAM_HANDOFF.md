@@ -23,7 +23,8 @@ details remain in `EXPERIMENT_LOG.md`, decisions in
   frozen 5-GiB cushion. That recovery was never opened or executed.
 - The 2026-08-15 cleanup restored free disk to `124.95 GiB`, but does not
   reopen or reinterpret that spent HOLD. Cleanup details are in
-  `STORAGE_CLEANUP_20260815.md`.
+  `STORAGE_CLEANUP_20260815.md`; the full current allocation is in
+  `STORAGE_AUDIT_20260815.md`.
 - The local `threes_rl/runs/` tree is evidence/data, not source. It is ignored
   by Git except for the small historical baselines already tracked. Do not
   delete anything under `runs/forensics/` without a reviewed retention
